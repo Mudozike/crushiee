@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "615916606527",
+    "project_id": "blackguard-a2e23",
+    "storage_bucket": "blackguard-a2e23.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:615916606527:android:5147ca2c1621cf463b148a",
+        "android_client_info": {
+          "package_name": "com.blackecho.blackmirror"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "615916606527-81nocqj809tro09erik9c8d9bv89ne8e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3wPfHYwdi7IWCHur585OznC36tVtcoXc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "615916606527-81nocqj809tro09erik9c8d9bv89ne8e.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:615916606527:android:a9b9d11877892e873b148a",
+        "android_client_info": {
+          "package_name": "com.blackecho.pro"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "615916606527-81nocqj809tro09erik9c8d9bv89ne8e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3wPfHYwdi7IWCHur585OznC36tVtcoXc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "615916606527-81nocqj809tro09erik9c8d9bv89ne8e.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
