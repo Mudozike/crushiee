@@ -11,6 +11,8 @@ import '../../widgets/status_badge.dart';
 import '../../widgets/post_card.dart';
 import '../../widgets/contact_reveal_card.dart';
 import '../../widgets/gradient_button.dart';
+import '../../widgets/verification_modal.dart';
+import '../premium/premium_subscription_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   final String? userId; // Null means current user profile
@@ -49,15 +51,14 @@ class ProfileScreen extends StatelessWidget {
     final isFollowing = dbService.isFollowing(user.id);
     final userPosts = postProv.filteredPosts.where((p) => p.userId == user.id).toList();
 
-    // Connection & Access Logic
-    // Premium users or connected users can see full private details
     final isConnected = currentUser != null &&
         dbService.connections.any((c) =>
             ((c.senderId == currentUser.id && c.recipientId == user.id) ||
                 (c.senderId == user.id && c.recipientId == currentUser.id)) &&
             c.status == ConnectionStatus.accepted);
 
-    final canViewPrivateDetails = isSelf || (currentUser?.isPremium ?? false) || isConnected;
+    // Contact details are strictly gated: Only Premium users (or self) can view contact details
+    final canViewPrivateDetails = isSelf || (currentUser?.isPremium ?? false);
 
     return Scaffold(
       appBar: AppBar(
@@ -95,9 +96,12 @@ class ProfileScreen extends StatelessWidget {
                           color: isDark ? AppColors.darkCard : Colors.white,
                           shape: BoxShape.circle,
                         ),
-                        child: CircleAvatar(
-                          radius: 46,
-                          backgroundImage: CachedNetworkImageProvider(user.profilePicUrl),
+                        child: GestureDetector(
+                          onTap: () => _showFullScreenImage(context, user.profilePicUrl),
+                          child: CircleAvatar(
+                            radius: 46,
+                            backgroundImage: CachedNetworkImageProvider(user.profilePicUrl),
+                          ),
                         ),
                       ),
                       Positioned(
@@ -117,7 +121,7 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 55),
 
-            // Username, Verification, Location
+            // Username, Verification, Premium Badges
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -162,8 +166,94 @@ class ProfileScreen extends StatelessWidget {
             StatusBadge(isOnline: user.isOnline, lastSeen: user.lastSeen, showText: true),
             const SizedBox(height: 16),
 
-            // Follow / Action Buttons
-            if (!isSelf && currentUser != null) ...[
+            // Self Status / Upgrade & Verification Action Buttons
+            if (isSelf) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.darkCard : Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => VerificationModal.show(context, user),
+                              icon: Icon(
+                                Icons.verified,
+                                color: user.isVerified ? AppColors.verifiedBlue : AppColors.primary,
+                                size: 18,
+                              ),
+                              label: Text(
+                                user.isVerified ? 'Verified' : 'Get Verified',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                side: BorderSide(
+                                  color: user.isVerified ? AppColors.verifiedBlue : AppColors.primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PremiumSubscriptionScreen(
+                                      onSubscriptionSuccess: () => Navigator.pop(context),
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.star, color: Colors.white, size: 18),
+                              label: Text(
+                                user.isPremium ? 'Premium Active' : 'Get Premium',
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12.5),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                primary: AppColors.primary,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      // Premium + Verified Bundle Button (Save KES 49/mo)
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => VerificationModal.show(context, user),
+                          icon: const Icon(Icons.auto_awesome, color: Colors.purple, size: 18),
+                          label: const Text(
+                            'Premium + Verified Bundle (KES 250/mo)',
+                            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple, fontSize: 12.5),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            side: const BorderSide(color: Colors.purple, width: 1.5),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ] else if (currentUser != null) ...[
+              // Follow / Connect Buttons for other user
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Row(
@@ -202,9 +292,9 @@ class ProfileScreen extends StatelessWidget {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
                         primary: AppColors.primary,
                       ),
-                      child: const Text(
-                        'Connect (KES 50)',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                      child: Text(
+                        currentUser.canConnectFree ? 'Connect (FREE)' : 'Connect',
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
                       ),
                     ),
                   ],
@@ -273,7 +363,6 @@ class ProfileScreen extends StatelessWidget {
                       username: user.username,
                     )
                   else
-                    // Locked Card for Unpaid / Non-Connected Users
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(20),
@@ -299,7 +388,7 @@ class ProfileScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Preferred contact method is ${user.preferredContactMethod}. Pay KES 50 connection fee or upgrade to Premium to unlock direct contact details.',
+                            'Preferred contact method is hidden. Only Crushie Premium members can view direct contact details (WhatsApp, Phone, Email, Telegram).',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 12.5,
@@ -308,15 +397,16 @@ class ProfileScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 16),
                           GradientButton(
-                            text: 'Connect to Unlock (KES 50)',
+                            text: 'Upgrade to Premium to Unlock Contact',
                             onPressed: () {
-                              if (currentUser != null) {
-                                connProv.initiateConnect(
-                                  context: context,
-                                  sender: currentUser,
-                                  recipient: user,
-                                );
-                              }
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PremiumSubscriptionScreen(
+                                    onSubscriptionSuccess: () => Navigator.pop(context),
+                                  ),
+                                ),
+                              );
                             },
                           ),
                         ],
@@ -382,6 +472,47 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  void _showFullScreenImage(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 4.0,
+              child: SizedBox(
+                width: double.infinity,
+                height: double.infinity,
+                child: CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.contain,
+                  placeholder: (_, __) => const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                  errorWidget: (_, __, ___) => const Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 40,
+              right: 20,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

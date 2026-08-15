@@ -12,6 +12,8 @@ class PostProvider extends ChangeNotifier {
   String _searchQuery = '';
   String get searchQuery => _searchQuery;
 
+  List<PostModel> get allPosts => _db.posts;
+
   // Filters
   String? _filterCountry;
   String? _filterGender;

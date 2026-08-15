@@ -9,6 +9,8 @@ import '../providers/post_provider.dart';
 import '../providers/connection_provider.dart';
 import '../services/database_service.dart';
 import 'status_badge.dart';
+import 'crushie_avatar.dart';
+import 'boost_post_modal.dart';
 
 class PostCard extends StatelessWidget {
   final PostModel post;
@@ -19,6 +21,28 @@ class PostCard extends StatelessWidget {
     required this.post,
     this.onTapUser,
   }) : super(key: key);
+
+  String _formatPostTime(DateTime createdAt) {
+    final now = DateTime.now();
+    final difference = now.difference(createdAt);
+
+    if (difference.inMinutes < 1) {
+      return 'just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d';
+    } else {
+      return '${createdAt.day}/${createdAt.month}/${createdAt.year}';
+    }
+  }
+
+  bool get isDatingCommunity {
+    final lower = post.community.toLowerCase();
+    return !lower.contains('advice') && !lower.contains('confession') && !lower.contains('stress');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,8 +57,13 @@ class PostCard extends StatelessWidget {
     final isSelf = currentUser != null && currentUser.id == post.userId;
     final isFollowing = dbService.isFollowing(post.userId);
 
+    final isMascotAvatar = post.userProfilePic.startsWith('crushie_avatar_');
+    final mascotIndex = isMascotAvatar
+        ? (int.tryParse(post.userProfilePic.replaceAll('crushie_avatar_', '')) ?? 0)
+        : 0;
+
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
         borderRadius: BorderRadius.circular(20),
@@ -79,27 +108,33 @@ class PostCard extends StatelessWidget {
               const SizedBox(height: 10),
             ],
 
-            // User Profile Row with Follow Button
+            // User Profile Row
             Row(
               children: [
-                // Avatar with online status indicator
+                // Avatar with online status indicator dot
                 GestureDetector(
                   onTap: onTapUser,
                   child: Stack(
                     children: [
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor: AppColors.primary.withOpacity(0.1),
-                        backgroundImage: post.userProfilePic.isNotEmpty
-                            ? CachedNetworkImageProvider(post.userProfilePic)
-                            : null,
-                        child: post.userProfilePic.isEmpty
-                            ? Text(
-                                post.username.isNotEmpty ? post.username[0].toUpperCase() : 'U',
-                                style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary),
-                              )
-                            : null,
-                      ),
+                      if (isMascotAvatar)
+                        CrushieAvatar(
+                          index: mascotIndex,
+                          radius: 24,
+                        )
+                      else
+                        CircleAvatar(
+                          radius: 24,
+                          backgroundColor: AppColors.primary.withOpacity(0.1),
+                          backgroundImage: post.userProfilePic.isNotEmpty
+                              ? CachedNetworkImageProvider(post.userProfilePic)
+                              : null,
+                          child: post.userProfilePic.isEmpty
+                              ? Text(
+                                  post.username.isNotEmpty ? post.username[0].toUpperCase() : 'U',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary),
+                                )
+                              : null,
+                        ),
                       Positioned(
                         right: 0,
                         bottom: 0,
@@ -107,7 +142,7 @@ class PostCard extends StatelessWidget {
                           isOnline: post.userIsOnline,
                           lastSeen: post.userLastSeen,
                           showText: false,
-                          dotSize: 12,
+                          dotSize: 11,
                         ),
                       ),
                     ],
@@ -115,7 +150,7 @@ class PostCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
 
-                // Username, Verification Badge, Location & Status
+                // Username, Verification Badge, Location & Post Timestamp
                 Expanded(
                   child: GestureDetector(
                     onTap: onTapUser,
@@ -150,11 +185,13 @@ class PostCard extends StatelessWidget {
                                 color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            StatusBadge(
-                              isOnline: post.userIsOnline,
-                              lastSeen: post.userLastSeen,
-                              showText: true,
+                            Text(
+                              ' · ${_formatPostTime(post.createdAt)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                              ),
                             ),
                           ],
                         ),
@@ -163,8 +200,8 @@ class PostCard extends StatelessWidget {
                   ),
                 ),
 
-                // Follow Button right next to username
-                if (!isSelf && currentUser != null)
+                // Follow / Boost Button
+                if (!isSelf && currentUser != null && !isFollowing)
                   OutlinedButton(
                     onPressed: () {
                       dbService.toggleFollow(currentUser.id, post.userId);
@@ -173,31 +210,42 @@ class PostCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       minimumSize: const Size(60, 30),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      side: BorderSide(
-                        color: isFollowing ? Colors.grey : AppColors.primary,
+                      side: const BorderSide(
+                        color: AppColors.primary,
                         width: 1.2,
                       ),
-                      primary: isFollowing ? Colors.grey : AppColors.primary,
                     ),
-                    child: Text(
-                      isFollowing ? 'Following' : '+ Follow',
+                    child: const Text(
+                      '+ Follow',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
-                        color: isFollowing ? Colors.grey : AppColors.primary,
+                        color: AppColors.primary,
                       ),
+                    ),
+                  )
+                else if (isSelf && currentUser != null)
+                  ElevatedButton.icon(
+                    onPressed: () => BoostPostModal.show(context, post, currentUser),
+                    icon: const Icon(Icons.bolt, size: 14, color: Colors.white),
+                    label: const Text('Boost', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      primary: AppColors.boostOrange,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      minimumSize: const Size(60, 30),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                   ),
               ],
             ),
             const SizedBox(height: 14),
 
-            // Looking For & Age Range & Availability Row
+            // Metadata Chips (Community Tag + Dating Pills if dating community)
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                // Community Tag
+                // Community Tag Pill
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
@@ -214,85 +262,87 @@ class PostCard extends StatelessWidget {
                   ),
                 ),
 
-                // Looking For Pill
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                if (isDatingCommunity) ...[
+                  // Looking For Pill
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: RichText(
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: 'Looking for: ',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: post.lookingFor,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  child: RichText(
-                    text: TextSpan(
+
+                  // Preferred Age Range Pill
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Age: ${post.ageRangeMin} - ${post.ageRangeMax}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                      ),
+                    ),
+                  ),
+
+                  // Availability Badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getAvailabilityColor(post.availability).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        TextSpan(
-                          text: 'Looking for: ',
+                        Icon(
+                          Icons.access_time,
+                          size: 13,
+                          color: _getAvailabilityColor(post.availability),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          post.availability,
                           style: TextStyle(
                             fontSize: 12,
-                            color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                          ),
-                        ),
-                        TextSpan(
-                          text: post.lookingFor,
-                          style: const TextStyle(
-                            fontSize: 13,
                             fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
+                            color: _getAvailabilityColor(post.availability),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
-
-                // Preferred Age Range Pill
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Age: ${post.ageRangeMin} - ${post.ageRangeMax}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                    ),
-                  ),
-                ),
-
-                // Availability Badge
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getAvailabilityColor(post.availability).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.access_time,
-                        size: 13,
-                        color: _getAvailabilityColor(post.availability),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        post.availability,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: _getAvailabilityColor(post.availability),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
 
-            // Post Description (Unlimited Length)
+            // Post Description / Content
             Text(
               post.description,
               style: TextStyle(
@@ -302,22 +352,25 @@ class PostCard extends StatelessWidget {
               ),
             ),
 
-            // Attached Picture (If Present)
+            // Attached Picture
             if (post.postImageUrl != null && post.postImageUrl!.isNotEmpty) ...[
               const SizedBox(height: 12),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: CachedNetworkImage(
-                  imageUrl: post.postImageUrl!,
-                  width: double.infinity,
-                  height: 220,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Container(
-                    height: 220,
-                    color: isDark ? AppColors.darkSurface : Colors.grey.shade200,
-                    child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              GestureDetector(
+                onTap: () => _showFullScreenImage(context, post.postImageUrl!),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: CachedNetworkImage(
+                    imageUrl: post.postImageUrl!,
+                    width: double.infinity,
+                    height: 230,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Container(
+                      height: 230,
+                      color: isDark ? AppColors.darkSurface : Colors.grey.shade200,
+                      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    ),
+                    errorWidget: (context, url, error) => const SizedBox(),
                   ),
-                  errorWidget: (context, url, error) => const SizedBox(),
                 ),
               ),
             ],
@@ -387,11 +440,11 @@ class PostCard extends StatelessWidget {
                   ),
                 ),
 
-                // Connect CTA Button (Triggers KES 50 Payment Flow)
+                // Connect CTA Button
                 ElevatedButton(
                   onPressed: () {
                     if (currentUser == null) return;
-                    
+
                     final targetUser = dbService.getUser(post.userId) ?? UserModel(
                       id: post.userId,
                       username: post.username,
@@ -456,7 +509,6 @@ class PostCard extends StatelessWidget {
     }
   }
 
-  // Crushes (Comments) Modal Sheet
   void _showCrushesSheet(BuildContext context, PostModel post) {
     final TextEditingController commentController = TextEditingController();
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -564,6 +616,47 @@ class PostCard extends StatelessWidget {
           },
         );
       },
+    );
+  }
+
+  void _showFullScreenImage(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 4.0,
+              child: SizedBox(
+                width: double.infinity,
+                height: double.infinity,
+                child: CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.contain,
+                  placeholder: (_, __) => const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                  errorWidget: (_, __, ___) => const Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 40,
+              right: 20,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

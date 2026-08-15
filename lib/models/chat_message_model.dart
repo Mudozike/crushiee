@@ -1,4 +1,4 @@
-
+enum MessageDeliveryStatus { sent, delivered, read }
 
 class ChatMessageModel {
   final String id;
@@ -8,6 +8,9 @@ class ChatMessageModel {
   final String message;
   final DateTime timestamp;
   final bool isRead;
+  final MessageDeliveryStatus deliveryStatus;
+  final bool isDeletedForEveryone;
+  final List<String> deletedForUserIds;
 
   ChatMessageModel({
     required this.id,
@@ -17,7 +20,11 @@ class ChatMessageModel {
     required this.message,
     DateTime? timestamp,
     this.isRead = false,
-  }) : timestamp = timestamp ?? DateTime.now();
+    MessageDeliveryStatus? deliveryStatus,
+    this.isDeletedForEveryone = false,
+    this.deletedForUserIds = const [],
+  })  : timestamp = timestamp ?? DateTime.now(),
+        deliveryStatus = deliveryStatus ?? (isRead ? MessageDeliveryStatus.read : MessageDeliveryStatus.delivered);
 
   Map<String, dynamic> toMap() {
     return {
@@ -28,6 +35,9 @@ class ChatMessageModel {
       'message': message,
       'timestamp': timestamp.toIso8601String(),
       'isRead': isRead,
+      'deliveryStatus': deliveryStatus.name,
+      'isDeletedForEveryone': isDeletedForEveryone,
+      'deletedForUserIds': deletedForUserIds,
     };
   }
 
@@ -42,6 +52,33 @@ class ChatMessageModel {
           ? DateTime.tryParse(map['timestamp']) ?? DateTime.now()
           : DateTime.now(),
       isRead: map['isRead'] ?? false,
+      deliveryStatus: MessageDeliveryStatus.values.firstWhere(
+        (e) => e.name == map['deliveryStatus'],
+        orElse: () => map['isRead'] == true ? MessageDeliveryStatus.read : MessageDeliveryStatus.delivered,
+      ),
+      isDeletedForEveryone: map['isDeletedForEveryone'] ?? false,
+      deletedForUserIds: List<String>.from(map['deletedForUserIds'] ?? []),
+    );
+  }
+
+  ChatMessageModel copyWith({
+    String? message,
+    bool? isRead,
+    MessageDeliveryStatus? deliveryStatus,
+    bool? isDeletedForEveryone,
+    List<String>? deletedForUserIds,
+  }) {
+    return ChatMessageModel(
+      id: id,
+      connectionId: connectionId,
+      senderId: senderId,
+      recipientId: recipientId,
+      message: message ?? this.message,
+      timestamp: timestamp,
+      isRead: isRead ?? this.isRead,
+      deliveryStatus: deliveryStatus ?? this.deliveryStatus,
+      isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
+      deletedForUserIds: deletedForUserIds ?? this.deletedForUserIds,
     );
   }
 }

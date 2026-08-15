@@ -1,6 +1,3 @@
-import 'package:flutter/material.dart';
-import '../config/app_colors.dart';
-
 class UserModel {
   final String id;
   final String username;
@@ -12,12 +9,20 @@ class UserModel {
   final String bio;
   final String profilePicUrl;
   final String preferredContactMethod; // WhatsApp, Telegram, Phone Call, Email
-  final String contactDetails;         // Private contact info
+  final String contactDetails;         // Private details revealed after payment
   final bool isVerified;
+  final DateTime? verifiedExpiry;
+  final String? verificationPhoto;     // Firebase Storage URL: verification/{userId}/photo.jpg
   final bool isPremium;
+  final DateTime? premiumExpiry;
+  final int dailyConnections;
+  final DateTime? dailyConnectionsDate;
+  final int monthlyConnections;
+  final DateTime? monthlyConnectionsMonth;
   final int followersCount;
   final int followingCount;
   final List<String> communities;
+  final List<String> blockedUserIds;
   final bool isOnline;
   final DateTime lastSeen;
   final DateTime createdAt;
@@ -35,10 +40,18 @@ class UserModel {
     required this.preferredContactMethod,
     required this.contactDetails,
     this.isVerified = false,
+    this.verifiedExpiry,
+    this.verificationPhoto,
     this.isPremium = false,
+    this.premiumExpiry,
+    this.dailyConnections = 0,
+    this.dailyConnectionsDate,
+    this.monthlyConnections = 0,
+    this.monthlyConnectionsMonth,
     this.followersCount = 0,
     this.followingCount = 0,
     this.communities = const [],
+    this.blockedUserIds = const [],
     this.isOnline = true,
     DateTime? lastSeen,
     DateTime? createdAt,
@@ -55,32 +68,30 @@ class UserModel {
     return age;
   }
 
-  String get statusText {
-    if (isOnline) {
-      return 'Online';
+  int get activeDailyConnections {
+    final now = DateTime.now();
+    if (dailyConnectionsDate == null) return 0;
+    if (dailyConnectionsDate!.year != now.year ||
+        dailyConnectionsDate!.month != now.month ||
+        dailyConnectionsDate!.day != now.day) {
+      return 0;
     }
-    final diff = DateTime.now().difference(lastSeen);
-    if (diff.inMinutes < 60) {
-      return 'Active ${diff.inMinutes} min ago';
-    } else if (diff.inHours < 24) {
-      return 'Active ${diff.inHours}h ago';
-    } else if (diff.inDays == 1) {
-      return 'Last seen yesterday';
-    } else {
-      return 'Last seen ${diff.inDays}d ago';
-    }
+    return dailyConnections;
   }
 
-  Color get statusColor {
-    if (isOnline) {
-      return AppColors.online;
+  int get activeMonthlyConnections {
+    final now = DateTime.now();
+    if (monthlyConnectionsMonth == null) return 0;
+    if (monthlyConnectionsMonth!.year != now.year ||
+        monthlyConnectionsMonth!.month != now.month) {
+      return 0;
     }
-    final diff = DateTime.now().difference(lastSeen);
-    if (diff.inHours < 24) {
-      return AppColors.activeToday;
-    }
-    return AppColors.offline;
+    return monthlyConnections;
   }
+
+  bool get isDailyLimitReached => !isPremium && activeDailyConnections >= 2;
+  bool get isMonthlyLimitReached => !isPremium && activeMonthlyConnections >= 20;
+  bool get canConnectFree => isPremium || (!isDailyLimitReached && !isMonthlyLimitReached);
 
   Map<String, dynamic> toMap() {
     return {
@@ -96,10 +107,18 @@ class UserModel {
       'preferredContactMethod': preferredContactMethod,
       'contactDetails': contactDetails,
       'isVerified': isVerified,
+      'verifiedExpiry': verifiedExpiry?.toIso8601String(),
+      'verificationPhoto': verificationPhoto,
       'isPremium': isPremium,
+      'premiumExpiry': premiumExpiry?.toIso8601String(),
+      'dailyConnections': activeDailyConnections,
+      'dailyConnectionsDate': dailyConnectionsDate?.toIso8601String(),
+      'monthlyConnections': activeMonthlyConnections,
+      'monthlyConnectionsMonth': monthlyConnectionsMonth?.toIso8601String(),
       'followersCount': followersCount,
       'followingCount': followingCount,
       'communities': communities,
+      'blockedUserIds': blockedUserIds,
       'isOnline': isOnline,
       'lastSeen': lastSeen.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
@@ -111,21 +130,29 @@ class UserModel {
       id: id,
       username: map['username'] ?? '',
       email: map['email'] ?? '',
-      country: map['country'] ?? 'Kenya',
-      city: map['city'] ?? 'Nairobi',
+      country: map['country'] ?? '',
+      city: map['city'] ?? '',
       dateOfBirth: map['dateOfBirth'] != null
           ? DateTime.tryParse(map['dateOfBirth']) ?? DateTime(2000, 1, 1)
           : DateTime(2000, 1, 1),
-      gender: map['gender'] ?? 'Female',
+      gender: map['gender'] ?? 'Other',
       bio: map['bio'] ?? '',
       profilePicUrl: map['profilePicUrl'] ?? '',
       preferredContactMethod: map['preferredContactMethod'] ?? 'WhatsApp',
       contactDetails: map['contactDetails'] ?? '',
       isVerified: map['isVerified'] ?? false,
+      verifiedExpiry: map['verifiedExpiry'] != null ? DateTime.tryParse(map['verifiedExpiry']) : null,
+      verificationPhoto: map['verificationPhoto'],
       isPremium: map['isPremium'] ?? false,
+      premiumExpiry: map['premiumExpiry'] != null ? DateTime.tryParse(map['premiumExpiry']) : null,
+      dailyConnections: map['dailyConnections'] ?? 0,
+      dailyConnectionsDate: map['dailyConnectionsDate'] != null ? DateTime.tryParse(map['dailyConnectionsDate']) : null,
+      monthlyConnections: map['monthlyConnections'] ?? 0,
+      monthlyConnectionsMonth: map['monthlyConnectionsMonth'] != null ? DateTime.tryParse(map['monthlyConnectionsMonth']) : null,
       followersCount: map['followersCount'] ?? 0,
       followingCount: map['followingCount'] ?? 0,
       communities: List<String>.from(map['communities'] ?? []),
+      blockedUserIds: List<String>.from(map['blockedUserIds'] ?? []),
       isOnline: map['isOnline'] ?? false,
       lastSeen: map['lastSeen'] != null
           ? DateTime.tryParse(map['lastSeen']) ?? DateTime.now()
@@ -138,7 +165,6 @@ class UserModel {
 
   UserModel copyWith({
     String? username,
-    String? email,
     String? country,
     String? city,
     DateTime? dateOfBirth,
@@ -148,17 +174,25 @@ class UserModel {
     String? preferredContactMethod,
     String? contactDetails,
     bool? isVerified,
+    DateTime? verifiedExpiry,
+    String? verificationPhoto,
     bool? isPremium,
+    DateTime? premiumExpiry,
+    int? dailyConnections,
+    DateTime? dailyConnectionsDate,
+    int? monthlyConnections,
+    DateTime? monthlyConnectionsMonth,
     int? followersCount,
     int? followingCount,
     List<String>? communities,
+    List<String>? blockedUserIds,
     bool? isOnline,
     DateTime? lastSeen,
   }) {
     return UserModel(
       id: id,
       username: username ?? this.username,
-      email: email ?? this.email,
+      email: email,
       country: country ?? this.country,
       city: city ?? this.city,
       dateOfBirth: dateOfBirth ?? this.dateOfBirth,
@@ -168,10 +202,18 @@ class UserModel {
       preferredContactMethod: preferredContactMethod ?? this.preferredContactMethod,
       contactDetails: contactDetails ?? this.contactDetails,
       isVerified: isVerified ?? this.isVerified,
+      verifiedExpiry: verifiedExpiry ?? this.verifiedExpiry,
+      verificationPhoto: verificationPhoto ?? this.verificationPhoto,
       isPremium: isPremium ?? this.isPremium,
+      premiumExpiry: premiumExpiry ?? this.premiumExpiry,
+      dailyConnections: dailyConnections ?? this.dailyConnections,
+      dailyConnectionsDate: dailyConnectionsDate ?? this.dailyConnectionsDate,
+      monthlyConnections: monthlyConnections ?? this.monthlyConnections,
+      monthlyConnectionsMonth: monthlyConnectionsMonth ?? this.monthlyConnectionsMonth,
       followersCount: followersCount ?? this.followersCount,
       followingCount: followingCount ?? this.followingCount,
       communities: communities ?? this.communities,
+      blockedUserIds: blockedUserIds ?? this.blockedUserIds,
       isOnline: isOnline ?? this.isOnline,
       lastSeen: lastSeen ?? this.lastSeen,
       createdAt: createdAt,

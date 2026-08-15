@@ -18,11 +18,14 @@ class AuthService {
   final DatabaseService _db = DatabaseService();
 
   UserModel? _currentUser;
-  UserModel? get currentUser => _currentUser;
+  UserModel? get currentUser {
+    if (_currentUser == null) return null;
+    return _db.getUser(_currentUser!.id) ?? _currentUser;
+  }
 
   AuthService() {
-    // Default logged in demo user
-    _currentUser = _db.getUser('current_user_1');
+    // Default to unauthenticated state so onboarding flow starts at LandingScreen
+    _currentUser = null;
   }
 
   Future<AuthResult> signInWithEmail({

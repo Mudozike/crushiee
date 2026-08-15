@@ -19,8 +19,8 @@ class ChatProvider extends ChangeNotifier {
     super.dispose();
   }
 
-  List<ChatMessageModel> getMessagesForConnection(String connectionId) {
-    return _db.getChatMessages(connectionId);
+  List<ChatMessageModel> getMessagesForConnection(String connectionId, {String? userId}) {
+    return _db.getChatMessages(connectionId, userId: userId);
   }
 
   void sendMessage({
@@ -41,5 +41,33 @@ class ChatProvider extends ChangeNotifier {
     );
 
     _db.sendChatMessage(msg);
+  }
+
+  void markMessagesAsRead(String connectionId, String currentUserId) {
+    _db.markMessagesAsRead(connectionId, currentUserId);
+  }
+
+  void deleteMessageForMe(String messageId, String userId) {
+    _db.deleteMessageForMe(messageId, userId);
+  }
+
+  void deleteMessageForEveryone(String messageId) {
+    _db.deleteMessageForEveryone(messageId);
+  }
+
+  void clearConversation(String connectionId, String userId) {
+    _db.clearConversation(connectionId, userId);
+  }
+
+  void deleteConversation(String connectionId, String userId) {
+    _db.deleteConversation(connectionId, userId);
+  }
+
+  void setTypingStatus(String connectionId, String userId, bool isTyping) {
+    _db.setTypingStatus(connectionId, userId, isTyping);
+  }
+
+  bool isUserTyping(String connectionId, String userId) {
+    return _db.isUserTyping(connectionId, userId);
   }
 }

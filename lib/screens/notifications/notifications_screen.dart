@@ -112,6 +112,8 @@ class NotificationsScreen extends StatelessWidget {
         return Icons.check_circle;
       case NotificationType.connectionDeclined:
         return Icons.cancel;
+      case NotificationType.system:
+        return Icons.info_outline;
     }
   }
 
@@ -129,6 +131,8 @@ class NotificationsScreen extends StatelessWidget {
         return Colors.green;
       case NotificationType.connectionDeclined:
         return Colors.red;
+      case NotificationType.system:
+        return Colors.purple;
     }
   }
 }

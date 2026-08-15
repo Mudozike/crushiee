@@ -12,23 +12,21 @@ class StatusBadge extends StatelessWidget {
     required this.isOnline,
     required this.lastSeen,
     this.showText = true,
-    this.dotSize = 10.0,
+    this.dotSize = 8.0,
   }) : super(key: key);
 
   String get _statusText {
     if (isOnline) return 'Online';
     final diff = DateTime.now().difference(lastSeen);
-    if (diff.inMinutes < 60) return 'Active ${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return 'Active ${diff.inHours}h ago';
+    if (diff.inMinutes < 60) return 'Last seen ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'Last seen ${diff.inHours}h ago';
     if (diff.inDays == 1) return 'Last seen yesterday';
     return 'Last seen ${diff.inDays}d ago';
   }
 
   Color get _statusColor {
     if (isOnline) return AppColors.online;
-    final diff = DateTime.now().difference(lastSeen);
-    if (diff.inHours < 24) return AppColors.activeToday;
-    return AppColors.offline;
+    return Colors.grey;
   }
 
   @override
@@ -38,37 +36,28 @@ class StatusBadge extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: dotSize,
-          height: dotSize,
-          decoration: BoxDecoration(
-            color: _statusColor,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: isDark ? AppColors.darkCard : Colors.white,
-              width: 1.5,
+        if (isOnline) ...[
+          Container(
+            width: dotSize,
+            height: dotSize,
+            decoration: BoxDecoration(
+              color: _statusColor,
+              shape: BoxShape.circle,
             ),
-            boxShadow: [
-              if (isOnline)
-                BoxShadow(
-                  color: AppColors.online.withOpacity(0.5),
-                  blurRadius: 4,
-                  spreadRadius: 1,
-                ),
-            ],
           ),
-        ),
-        if (showText) ...[
-          const SizedBox(width: 6),
+          if (showText) const SizedBox(width: 5),
+        ],
+        if (showText)
           Text(
             _statusText,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+              fontWeight: isOnline ? FontWeight.w600 : FontWeight.normal,
+              color: isOnline
+                  ? (isDark ? Colors.white70 : Colors.black87)
+                  : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
             ),
           ),
-        ],
       ],
     );
   }

@@ -7,6 +7,7 @@ enum NotificationType {
   connectionRequest,  // Someone requested to Connect
   connectionAccepted, // Someone accepted your Connection
   connectionDeclined, // Someone declined your Connection
+  system,             // System/Support notification
 }
 
 class NotificationModel {
@@ -74,6 +75,25 @@ class NotificationModel {
       createdAt: map['createdAt'] != null
           ? DateTime.tryParse(map['createdAt']) ?? DateTime.now()
           : DateTime.now(),
+    );
+  }
+
+  NotificationModel copyWith({
+    bool? isRead,
+  }) {
+    return NotificationModel(
+      id: id,
+      userId: userId,
+      fromUserId: fromUserId,
+      fromUsername: fromUsername,
+      fromUserProfilePic: fromUserProfilePic,
+      type: type,
+      title: title,
+      body: body,
+      postId: postId,
+      connectionId: connectionId,
+      isRead: isRead ?? this.isRead,
+      createdAt: createdAt,
     );
   }
 }

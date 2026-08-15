@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../config/app_colors.dart';
+import '../providers/post_provider.dart';
 import '../widgets/custom_app_bar.dart';
+import '../widgets/crushie_logo.dart';
+import '../widgets/category_sidebar_drawer.dart';
 import 'feed/home_feed_screen.dart';
 import 'discover/discover_screen.dart';
 import 'post/create_post_screen.dart';
@@ -27,14 +31,26 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
-  String? _selectedProfileUserId;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final postProv = Provider.of<PostProvider>(context);
 
     return Scaffold(
+      key: _scaffoldKey,
+      endDrawer: CategorySidebarDrawer(
+        selectedCategory: postProv.selectedCommunity,
+        onSelectCategory: (cat) {
+          postProv.selectCommunity(cat);
+        },
+      ),
       appBar: CustomAppBar(
+        activeFilterName: postProv.selectedCommunity,
+        onTapFilter: () {
+          _scaffoldKey.currentState?.openEndDrawer();
+        },
         onTapNotifications: () {
           Navigator.push(
             context,
@@ -78,7 +94,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           // Tab 0: Home Feed
           HomeFeedScreen(
             onTapUser: (userId) {
-              setState(() => _selectedProfileUserId = userId);
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -109,7 +124,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           // Tab 2: Create Post
           CreatePostScreen(
             onPostCreated: () {
-              setState(() => _currentIndex = 0); // Switch to feed after post
+              setState(() => _currentIndex = 0);
             },
           ),
 
@@ -128,13 +143,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           // Tab 4: Communities
           CommunitiesScreen(
             onSelectCommunity: () {
-              setState(() => _currentIndex = 0); // Switch to home feed for filtered community
+              setState(() => _currentIndex = 0);
             },
           ),
         ],
       ),
 
-      // Prominent Bottom Navigation Bar (5 tabs)
+      // Prominent Bottom Navigation Bar with Original Crushie Logo for Home
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: isDark ? AppColors.darkSurface : Colors.white,
@@ -158,17 +173,37 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           selectedFontSize: 11,
           unselectedFontSize: 11,
           items: [
-            const BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home, color: AppColors.primary),
+            // 1. Home Tab with Original Crushie Logo Icon
+            BottomNavigationBarItem(
+              icon: Opacity(
+                opacity: 0.6,
+                child: const CrushieLogo(size: 24, showShadow: false),
+              ),
+              activeIcon: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary,
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+                child: const CrushieLogo(size: 26, showShadow: false),
+              ),
               label: 'Home',
             ),
+
+            // 2. Discover Tab
             const BottomNavigationBarItem(
               icon: Icon(Icons.explore_outlined),
               activeIcon: Icon(Icons.explore, color: AppColors.primary),
               label: 'Discover',
             ),
-            // Prominent Center Create Post Button
+
+            // 3. Prominent Center Create Post Button
             BottomNavigationBarItem(
               icon: Container(
                 padding: const EdgeInsets.all(8),
@@ -180,11 +215,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               ),
               label: 'Post',
             ),
+
+            // 4. Messages Tab
             const BottomNavigationBarItem(
               icon: Icon(Icons.chat_bubble_outline),
               activeIcon: Icon(Icons.chat_bubble, color: AppColors.primary),
               label: 'Messages',
             ),
+
+            // 5. Communities Tab
             const BottomNavigationBarItem(
               icon: Icon(Icons.grid_view_outlined),
               activeIcon: Icon(Icons.grid_view, color: AppColors.primary),

@@ -73,7 +73,9 @@ class AppConstants {
   // Monetization Pricing (KES)
   static const double connectionFeeKES = 50.0;
   static const double premiumMonthlyKES = 200.0;
-  static const double verificationFeeKES = 499.0; // Lifetime Verification KES 499
-  static const double boost24hKES = 99.0;
-  static const double boost7dKES = 200.0;
+  static const double verificationMonthlyKES = 99.0;
+  static const double verificationYearlyKES = 999.0;
+  static const double bundleMonthlyKES = 250.0;
+  static const double boost24hKES = 49.0;
+  static const double boost7dKES = 199.0;
 }
