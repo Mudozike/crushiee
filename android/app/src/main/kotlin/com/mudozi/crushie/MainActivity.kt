@@ -1,4 +1,4 @@
-package com.example.crushie
+package com.mudozi.crushie
 
 import io.flutter.embedding.android.FlutterActivity
 

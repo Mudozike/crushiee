@@ -3,9 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../config/app_colors.dart';
 import '../../models/transaction_model.dart';
+import '../../models/notification_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/database_service.dart';
+import '../../services/firestore_service.dart';
 import '../../services/storage_service.dart';
 import '../../services/paystack_service.dart';
 import '../../widgets/gradient_button.dart';
@@ -305,33 +307,53 @@ class _VerificationScreenState extends State<VerificationScreen> {
                   );
 
                   if (result != null && result.success) {
-                    dbService.recordTransaction(
-                      TransactionModel(
-                        id: result.transactionId,
-                        userId: user.id,
-                        type: type,
-                        amount: amount,
-                        paymentReference: result.transactionId,
-                        status: 'success',
-                      ),
+                    final tx = TransactionModel(
+                      id: result.transactionId,
+                      userId: user.id,
+                      type: type,
+                      amount: amount,
+                      paymentMethod: result.paymentMethod,
+                      paymentReference: result.transactionId,
+                      status: 'completed',
+                      metadata: {
+                        'plan': _selectedOption,
+                        'verificationPhoto': photoUrl,
+                      },
                     );
+                    await FirestoreService().saveTransaction(tx);
 
-                    userProv.verifyUserWithPhoto(user.id, photoUrl, days: days);
+                    final updated = user.copyWith(
+                      isVerified: true,
+                      verifiedExpiry: DateTime.now().add(Duration(days: days)),
+                      verificationPhoto: photoUrl,
+                      isPremium: type == 'bundle' ? true : user.isPremium,
+                      premiumExpiry: type == 'bundle' ? DateTime.now().add(Duration(days: days)) : user.premiumExpiry,
+                    );
+                    await authProv.updateUserProfile(updated);
 
-                    if (type == 'bundle') {
-                      dbService.upgradeUserToBundle(user.id, days: days);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('🎉 Premium + Verified Bundle Activated! Photo Saved to Firebase!')),
-                      );
-                    } else {
-                      dbService.verifyUser(user.id, days: days);
+                    final notif = NotificationModel(
+                      id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+                      userId: user.id,
+                      fromUserId: 'system',
+                      fromUsername: 'Crushie Support',
+                      fromUserProfilePic: '',
+                      type: NotificationType.system,
+                      title: 'Account Verified!',
+                      body: 'Your verification ($desc) has been approved and activated.',
+                    );
+                    await FirestoreService().createNotification(notif);
+
+                    if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('🎉 Congratulations! Profile Verified & Photo Saved to Firebase!')),
                       );
-                    }
 
-                    authProv.refreshUser();
-                    widget.onVerifiedSuccess();
+                      if (widget.onVerifiedSuccess != null) {
+                        widget.onVerifiedSuccess!();
+                      } else {
+                        Navigator.pop(context);
+                      }
+                    }
                   }
                 },
               ),

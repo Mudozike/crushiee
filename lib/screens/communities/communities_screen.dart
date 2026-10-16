@@ -136,7 +136,7 @@ class _CommunitiesScreenState extends State<CommunitiesScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            const Divider(height: 1),
+            const SizedBox(height: 6),
 
             // Header for Sample Posts
             Padding(
@@ -144,16 +144,20 @@ class _CommunitiesScreenState extends State<CommunitiesScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    _selectedCommunityName == null
-                        ? 'Sample Posts in All Communities'
-                        : 'Sample Posts in $_selectedCommunityName',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                  Flexible(
+                    child: Text(
+                      _selectedCommunityName == null
+                          ? 'Sample Posts in All Communities'
+                          : 'Sample Posts in $_selectedCommunityName',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Text(
                     '${displayedPosts.length} posts',
                     style: const TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.bold),
@@ -175,7 +179,10 @@ class _CommunitiesScreenState extends State<CommunitiesScreen> {
                       itemCount: displayedPosts.length,
                       padding: const EdgeInsets.only(bottom: 20),
                       itemBuilder: (ctx, i) {
-                        return PostCard(post: displayedPosts[i]);
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: PostCard(post: displayedPosts[i]),
+                        );
                       },
                     ),
             ),

@@ -25,7 +25,8 @@ class SignUpScreen extends StatefulWidget {
   State<SignUpScreen> createState() => _SignUpScreenState();
 }
 
-class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderStateMixin {
+class _SignUpScreenState extends State<SignUpScreen>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -40,13 +41,15 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
   bool get _isPasswordValid => _passwordController.text.length >= 6;
 
   bool get _isEmailValid =>
-      _emailController.text.contains('@') && _emailController.text.trim().length > 3;
+      _emailController.text.contains('@') &&
+      _emailController.text.trim().length > 3;
 
   bool get _doPasswordsMatch =>
       _passwordController.text.isNotEmpty &&
       _passwordController.text == _confirmPasswordController.text;
 
-  bool get _isFormReady => _isEmailValid && _isPasswordValid && _doPasswordsMatch;
+  bool get _isFormReady =>
+      _isEmailValid && _isPasswordValid && _doPasswordsMatch;
 
   @override
   void initState() {
@@ -84,12 +87,14 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
         return true;
       },
       child: Scaffold(
-        backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
+        backgroundColor:
+            isDark ? AppColors.darkBackground : AppColors.lightBackground,
         appBar: AppBar(
           elevation: 0,
           backgroundColor: Colors.transparent,
           leading: IconButton(
-            icon: Icon(Icons.arrow_back, color: isDark ? Colors.white : Colors.black87),
+            icon: Icon(Icons.arrow_back,
+                color: isDark ? Colors.white : Colors.black87),
             onPressed: () {
               if (widget.onBack != null) {
                 widget.onBack!();
@@ -104,7 +109,8 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
             builder: (context, constraints) {
               return SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 460),
@@ -129,13 +135,17 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                                 fontSize: 28,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: -0.5,
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                             ),
                             const SizedBox(height: 8),
 
                             ShaderMask(
-                              shaderCallback: (bounds) => AppColors.primaryGradient.createShader(bounds),
+                              shaderCallback: (bounds) => AppColors
+                                  .primaryGradient
+                                  .createShader(bounds),
                               child: const Text(
                                 'Your next meaningful connection starts here.',
                                 textAlign: TextAlign.center,
@@ -151,16 +161,53 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                             // 2. Authentication: Continue with Google
                             GoogleSignInButton(
                               text: 'Continue with Google',
-                              onPressed: () async {
-                                final success = await authProv.signInWithGoogle();
-                                if (success) {
-                                  if (widget.onGoogleSignInSuccess != null) {
-                                    widget.onGoogleSignInSuccess!();
-                                  } else {
-                                    widget.onSignUpSuccess(_emailController.text.trim());
-                                  }
-                                }
-                              },
+                              onPressed: authProv.isLoading
+                                  ? null
+                                  : () async {
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final success =
+                                          await authProv.signInWithGoogle();
+                                      if (!mounted) return;
+
+                                      if (success) {
+                                        if (widget.onGoogleSignInSuccess !=
+                                            null) {
+                                          widget.onGoogleSignInSuccess!();
+                                        }
+                                      } else {
+                                        if (authProv.errorMessage != null) {
+                                          final errorMsg =
+                                              authProv.errorMessage!;
+                                          final isProviderConflict = authProv
+                                                      .errorCode ==
+                                                  'account-exists-with-different-credential' ||
+                                              errorMsg.toLowerCase().contains(
+                                                  'another sign-in method');
+
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text(errorMsg),
+                                              backgroundColor:
+                                                  Colors.red.shade700,
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              duration:
+                                                  const Duration(seconds: 5),
+                                              action: isProviderConflict
+                                                  ? SnackBarAction(
+                                                      label: 'Sign In',
+                                                      textColor:
+                                                          Colors.amberAccent,
+                                                      onPressed:
+                                                          widget.onSignInTap,
+                                                    )
+                                                  : null,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
                             ),
                             const SizedBox(height: 20),
 
@@ -168,14 +215,20 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                             Row(
                               children: [
                                 Expanded(
-                                  child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  child: Divider(
+                                      color: isDark
+                                          ? AppColors.darkBorder
+                                          : AppColors.lightBorder),
                                 ),
                                 Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16),
                                   child: Text(
                                     'OR',
                                     style: TextStyle(
-                                      color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                      color: isDark
+                                          ? AppColors.darkTextSecondary
+                                          : AppColors.lightTextSecondary,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w800,
                                       letterSpacing: 1.0,
@@ -183,7 +236,10 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                                   ),
                                 ),
                                 Expanded(
-                                  child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  child: Divider(
+                                      color: isDark
+                                          ? AppColors.darkBorder
+                                          : AppColors.lightBorder),
                                 ),
                               ],
                             ),
@@ -196,35 +252,46 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                               autofillHints: const [AutofillHints.email],
                               onChanged: (_) => setState(() {}),
                               style: TextStyle(
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                               decoration: InputDecoration(
                                 labelText: 'Email Address',
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                prefixIcon: const Icon(Icons.email_outlined, color: AppColors.primary),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                floatingLabelBehavior:
+                                    FloatingLabelBehavior.auto,
+                                prefixIcon: const Icon(Icons.email_outlined,
+                                    color: AppColors.primary),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 16),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
                                   borderSide: BorderSide(
-                                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                                    color: isDark
+                                        ? AppColors.darkBorder
+                                        : AppColors.lightBorder,
                                     width: 1.2,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: AppColors.primary, width: 2),
                                 ),
                                 errorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 1.2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 1.2),
                                 ),
                                 focusedErrorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 2),
                                 ),
                               ),
-                              validator: (v) =>
-                                  (v == null || !v.contains('@')) ? 'Enter a valid email address' : null,
+                              validator: (v) => (v == null || !v.contains('@'))
+                                  ? 'Enter a valid email address'
+                                  : null,
                             ),
                             const SizedBox(height: 16),
 
@@ -235,47 +302,58 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                               autofillHints: const [AutofillHints.newPassword],
                               onChanged: (_) => setState(() {}),
                               style: TextStyle(
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                               decoration: InputDecoration(
                                 labelText: 'Password',
-                                helperText: 'Password must be at least 6 characters.',
-                                helperStyle: const TextStyle(fontSize: 12, color: Colors.grey),
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                prefixIcon: const Icon(Icons.lock_outline, color: AppColors.primary),
+                                floatingLabelBehavior:
+                                    FloatingLabelBehavior.auto,
+                                prefixIcon: const Icon(Icons.lock_outline,
+                                    color: AppColors.primary),
                                 suffixIcon: IconButton(
                                   icon: Icon(
-                                    _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                    _obscurePassword
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    color: isDark
+                                        ? AppColors.darkTextSecondary
+                                        : AppColors.lightTextSecondary,
                                   ),
-                                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                                  onPressed: () => setState(() =>
+                                      _obscurePassword = !_obscurePassword),
                                 ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 16),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
                                   borderSide: BorderSide(
-                                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                                    color: isDark
+                                        ? AppColors.darkBorder
+                                        : AppColors.lightBorder,
                                     width: 1.2,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: AppColors.primary, width: 2),
                                 ),
                                 errorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 1.2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 1.2),
                                 ),
                                 focusedErrorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 2),
                                 ),
                               ),
-                              validator: (v) {
-                                if (v == null || v.isEmpty) return 'Enter a password';
-                                if (v.length < 6) return 'Password must be at least 6 characters';
-                                return null;
-                              },
+                              validator: (v) => (v == null || v.length < 6)
+                                  ? 'Password must be at least 6 characters'
+                                  : null,
                             ),
                             const SizedBox(height: 16),
 
@@ -286,45 +364,59 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                               autofillHints: const [AutofillHints.newPassword],
                               onChanged: (_) => setState(() {}),
                               style: TextStyle(
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                               decoration: InputDecoration(
                                 labelText: 'Confirm Password',
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                prefixIcon: const Icon(Icons.lock_reset, color: AppColors.primary),
+                                floatingLabelBehavior:
+                                    FloatingLabelBehavior.auto,
+                                prefixIcon: const Icon(Icons.lock_reset,
+                                    color: AppColors.primary),
                                 suffixIcon: IconButton(
                                   icon: Icon(
                                     _obscureConfirmPassword
                                         ? Icons.visibility_off_outlined
                                         : Icons.visibility_outlined,
-                                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                    color: isDark
+                                        ? AppColors.darkTextSecondary
+                                        : AppColors.lightTextSecondary,
                                   ),
-                                  onPressed: () =>
-                                      setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                                  onPressed: () => setState(() =>
+                                      _obscureConfirmPassword =
+                                          !_obscureConfirmPassword),
                                 ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 16),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
                                   borderSide: BorderSide(
-                                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                                    color: isDark
+                                        ? AppColors.darkBorder
+                                        : AppColors.lightBorder,
                                     width: 1.2,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: AppColors.primary, width: 2),
                                 ),
                                 errorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 1.2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 1.2),
                                 ),
                                 focusedErrorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 2),
                                 ),
                               ),
                               validator: (v) {
-                                if (v != _passwordController.text) return 'Passwords do not match';
+                                if (v != _passwordController.text)
+                                  return 'Passwords do not match';
                                 return null;
                               },
                             ),
@@ -335,15 +427,58 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                               text: 'Create Account',
                               height: 56,
                               isLoading: authProv.isLoading,
-                              onPressed: _isFormReady
+                              onPressed: (_isFormReady && !authProv.isLoading)
                                   ? () async {
                                       if (_formKey.currentState!.validate()) {
-                                        final email = _emailController.text.trim();
-                                        final password = _passwordController.text.trim();
+                                        final messenger =
+                                            ScaffoldMessenger.of(context);
+                                        final email =
+                                            _emailController.text.trim();
+                                        final password =
+                                            _passwordController.text.trim();
                                         final username = email.split('@').first;
 
-                                        await authProv.signUpWithEmail(email, password, username);
-                                        widget.onSignUpSuccess(email);
+                                        final success =
+                                            await authProv.signUpWithEmail(
+                                                email, password, username);
+                                        if (!mounted) return;
+
+                                        if (success) {
+                                          widget.onSignUpSuccess(email);
+                                        } else {
+                                          final errorMsg = authProv
+                                                  .errorMessage ??
+                                              'Registration failed. Please try again.';
+                                          final isExistingAccount = authProv
+                                                      .errorCode ==
+                                                  'email-already-in-use' ||
+                                              errorMsg.toLowerCase().contains(
+                                                  'already registered') ||
+                                              errorMsg
+                                                  .toLowerCase()
+                                                  .contains('already exists');
+
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text(errorMsg),
+                                              backgroundColor:
+                                                  Colors.red.shade700,
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              duration:
+                                                  const Duration(seconds: 5),
+                                              action: isExistingAccount
+                                                  ? SnackBarAction(
+                                                      label: 'Sign In',
+                                                      textColor:
+                                                          Colors.amberAccent,
+                                                      onPressed:
+                                                          widget.onSignInTap,
+                                                    )
+                                                  : null,
+                                            ),
+                                          );
+                                        }
                                       }
                                     }
                                   : null,
@@ -351,8 +486,9 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                             const SizedBox(height: 24),
 
                             // Footer: Sign In Link
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                            Wrap(
+                              alignment: WrapAlignment.center,
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
                                 Text(
                                   'Already have an account? ',
@@ -380,9 +516,11 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
 
                             // Clickable Terms Disclaimer
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
                               child: GestureDetector(
-                                onTap: () => TermsAndConditionsModal.show(context),
+                                onTap: () =>
+                                    TermsAndConditionsModal.show(context),
                                 child: RichText(
                                   textAlign: TextAlign.center,
                                   text: TextSpan(
@@ -394,7 +532,9 @@ class _SignUpScreenState extends State<SignUpScreen> with SingleTickerProviderSt
                                           : AppColors.lightTextSecondary,
                                     ),
                                     children: const [
-                                      TextSpan(text: 'By creating an account, you agree to our '),
+                                      TextSpan(
+                                          text:
+                                              'By creating an account, you agree to our '),
                                       TextSpan(
                                         text: 'Terms of Service',
                                         style: TextStyle(

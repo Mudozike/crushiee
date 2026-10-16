@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../config/app_colors.dart';
 import '../../config/app_constants.dart';
-import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/gradient_button.dart';
 
@@ -33,7 +32,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _usernameController = TextEditingController(text: user?.username ?? '');
     _bioController = TextEditingController(text: user?.bio ?? '');
     _cityController = TextEditingController(text: user?.city ?? 'Nairobi');
-    _contactDetailsController = TextEditingController(text: user?.contactDetails ?? '');
+    _contactDetailsController =
+        TextEditingController(text: user?.contactDetails ?? '');
 
     if (user != null) {
       if (AppConstants.countries.contains(user.country)) {
@@ -77,7 +77,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                    color: isDark
+                        ? AppColors.darkTextPrimary
+                        : AppColors.lightTextPrimary,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -85,7 +87,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   'Keep your bio, location, and contact information up to date.',
                   style: TextStyle(
                     fontSize: 13,
-                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                    color: isDark
+                        ? AppColors.darkTextSecondary
+                        : AppColors.lightTextSecondary,
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -95,9 +99,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   controller: _usernameController,
                   decoration: const InputDecoration(
                     labelText: 'Username',
-                    prefixIcon: Icon(Icons.person_outline, color: AppColors.primary),
+                    prefixIcon:
+                        Icon(Icons.person_outline, color: AppColors.primary),
                   ),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter a username' : null,
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Enter a username'
+                      : null,
                 ),
                 const SizedBox(height: 16),
 
@@ -134,9 +141,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   controller: _cityController,
                   decoration: const InputDecoration(
                     labelText: 'City / Region',
-                    prefixIcon: Icon(Icons.location_city, color: AppColors.primary),
+                    prefixIcon:
+                        Icon(Icons.location_city, color: AppColors.primary),
                   ),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter your city' : null,
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Enter your city'
+                      : null,
                 ),
                 const SizedBox(height: 24),
 
@@ -145,7 +155,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                    color: isDark
+                        ? AppColors.darkTextPrimary
+                        : AppColors.lightTextPrimary,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -155,13 +167,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   value: _selectedContactMethod,
                   decoration: const InputDecoration(
                     labelText: 'Preferred Contact Method',
-                    prefixIcon: Icon(Icons.contact_phone_outlined, color: AppColors.primary),
+                    prefixIcon: Icon(Icons.contact_phone_outlined,
+                        color: AppColors.primary),
                   ),
                   items: AppConstants.contactMethods.map((m) {
                     return DropdownMenuItem(value: m, child: Text(m));
                   }).toList(),
                   onChanged: (val) {
-                    if (val != null) setState(() => _selectedContactMethod = val);
+                    if (val != null)
+                      setState(() => _selectedContactMethod = val);
                   },
                 ),
                 const SizedBox(height: 16),
@@ -171,21 +185,26 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   controller: _contactDetailsController,
                   decoration: InputDecoration(
                     labelText: 'Contact Details ($_selectedContactMethod)',
-                    prefixIcon: const Icon(Icons.lock_outline, color: AppColors.primary),
+                    prefixIcon: const Icon(Icons.lock_outline,
+                        color: AppColors.primary),
                     hintText: _selectedContactMethod == 'WhatsApp'
                         ? '+254712345678'
                         : _selectedContactMethod == 'Telegram'
                             ? '@username'
                             : 'Contact details',
                   ),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter contact details' : null,
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Enter contact details'
+                      : null,
                 ),
                 const SizedBox(height: 30),
 
                 // Save Button
                 GradientButton(
                   text: 'Save Changes',
-                  onPressed: () {
+                  isLoading: authProv.isLoading,
+                  onPressed: () async {
+                    if (authProv.isLoading) return;
                     if (_formKey.currentState!.validate() && user != null) {
                       final updatedUser = user.copyWith(
                         username: _usernameController.text.trim(),
@@ -196,13 +215,37 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         contactDetails: _contactDetailsController.text.trim(),
                       );
 
-                      authProv.updateUserProfile(updatedUser);
+                      final success =
+                          await authProv.updateUserProfile(updatedUser);
 
+                      if (!mounted || !context.mounted) return;
+                      if (success) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Profile updated successfully!'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                        if (Navigator.canPop(context)) {
+                          Navigator.pop(context);
+                        }
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(authProv.errorMessage ??
+                                'Failed to update profile. Please try again.'),
+                            backgroundColor: Colors.redAccent,
+                          ),
+                        );
+                      }
+                    } else if (user == null && mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Profile updated successfully!')),
+                        const SnackBar(
+                          content: Text(
+                              'No active user session found. Please log in again.'),
+                          backgroundColor: Colors.redAccent,
+                        ),
                       );
-
-                      Navigator.pop(context);
                     }
                   },
                 ),

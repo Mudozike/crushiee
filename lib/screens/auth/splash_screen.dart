@@ -4,7 +4,7 @@ import '../../config/app_colors.dart';
 import '../../widgets/crushie_logo.dart';
 
 class SplashScreen extends StatefulWidget {
-  final VoidCallback onSplashComplete;
+  final Future<void> Function() onSplashComplete;
 
   const SplashScreen({
     Key? key,
@@ -25,7 +25,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.initState();
     _animController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 600),
     );
 
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
@@ -38,9 +38,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     _animController.forward();
 
-    Timer(const Duration(milliseconds: 1800), () {
+    Timer(const Duration(milliseconds: 800), () async {
       if (mounted) {
-        widget.onSplashComplete();
+        await widget.onSplashComplete();
       }
     });
   }

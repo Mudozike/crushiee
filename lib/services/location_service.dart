@@ -50,9 +50,10 @@ class LocationService {
         );
       }
 
-      // Position coordinates acquired
+      // Position coordinates acquired (with safe timeout)
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 7),
       );
 
       debugPrint('Location fetched: ${position.latitude}, ${position.longitude}');

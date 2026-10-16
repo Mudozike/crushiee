@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../config/app_colors.dart';
 import '../../config/app_constants.dart';
 import '../../models/post_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/user_provider.dart';
 import '../../providers/post_provider.dart';
+import '../../services/database_service.dart';
 import '../../widgets/post_card.dart';
 import '../../widgets/crushie_avatar.dart';
 
@@ -34,7 +38,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     super.initState();
     _searchFocusNode.addListener(() {
       setState(() {
-        _showSuggestions = _searchFocusNode.hasFocus && _searchController.text.trim().isNotEmpty;
+        _showSuggestions = _searchFocusNode.hasFocus &&
+            _searchController.text.trim().isNotEmpty;
       });
     });
   }
@@ -98,18 +103,25 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   'location': p.location,
                   'vibe': p.lookingFor,
                 })
-            .fold<List<Map<String, String>>>(<Map<String, String>>[], (list, item) {
-            if (!list.any((e) => e['userId'] == item['userId'])) {
-              list.add(item);
-            }
-            return list;
-          }).take(4).toList();
+            .fold<List<Map<String, String>>>(<Map<String, String>>[],
+                (list, item) {
+              if (!list.any((e) => e['userId'] == item['userId'])) {
+                list.add(item);
+              }
+              return list;
+            })
+            .take(4)
+            .toList();
 
     // 2. Autocomplete Category / Vibe Suggestions
     final allCategoryNames = [
       ...AppConstants.communities.map((c) => c['name']!),
       ...AppConstants.lookingForOptions,
-      'Nairobi', 'Mombasa', 'Kenya', 'Uganda', 'Tanzania'
+      'Nairobi',
+      'Mombasa',
+      'Kenya',
+      'Uganda',
+      'Tanzania'
     ];
 
     final matchingCategories = query.isEmpty
@@ -120,13 +132,15 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             .take(3)
             .toList();
 
-    final hasSuggestions = query.isNotEmpty && (matchingProfiles.isNotEmpty || matchingCategories.isNotEmpty);
+    final hasSuggestions = query.isNotEmpty &&
+        (matchingProfiles.isNotEmpty || matchingCategories.isNotEmpty);
 
     // Smart Ranked Posts
     final rankedPosts = _rankPosts(rawPosts, query);
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
+      backgroundColor:
+          isDark ? AppColors.darkBackground : AppColors.lightBackground,
       body: SafeArea(
         child: Column(
           children: [
@@ -147,11 +161,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                       });
                     },
                     style: TextStyle(
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                      color: isDark
+                          ? AppColors.darkTextPrimary
+                          : AppColors.lightTextPrimary,
                     ),
                     decoration: InputDecoration(
                       hintText: 'Search username, location, or vibes...',
-                      prefixIcon: const Icon(Icons.search, color: AppColors.primary),
+                      prefixIcon:
+                          const Icon(Icons.search, color: AppColors.primary),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear),
@@ -162,16 +179,20 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                               },
                             )
                           : null,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 14),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide(
-                          color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                          color: isDark
+                              ? AppColors.darkBorder
+                              : AppColors.lightBorder,
                         ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
-                        borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                        borderSide: const BorderSide(
+                            color: AppColors.primary, width: 2),
                       ),
                     ),
                   ),
@@ -185,7 +206,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         color: isDark ? AppColors.darkCard : Colors.white,
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
-                          color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                          color: isDark
+                              ? AppColors.darkBorder
+                              : AppColors.lightBorder,
                         ),
                         boxShadow: [
                           BoxShadow(
@@ -202,7 +225,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           // Matching Profiles Section
                           if (matchingProfiles.isNotEmpty) ...[
                             Padding(
-                              padding: const EdgeInsets.only(left: 16, top: 12, bottom: 4),
+                              padding: const EdgeInsets.only(
+                                  left: 16, top: 12, bottom: 4),
                               child: Text(
                                 'SUGGESTED PROFILES',
                                 style: TextStyle(
@@ -215,31 +239,40 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                             ),
                             ...matchingProfiles.map((prof) {
                               final picUrl = prof['pic']!;
-                              final isMascot = picUrl.startsWith('crushie_avatar_');
+                              final isMascot =
+                                  picUrl.startsWith('crushie_avatar_');
                               final mascotIndex = isMascot
-                                  ? (int.tryParse(picUrl.replaceAll('crushie_avatar_', '')) ?? 0)
+                                  ? (int.tryParse(picUrl.replaceAll(
+                                          'crushie_avatar_', '')) ??
+                                      0)
                                   : 0;
 
                               return ListTile(
                                 dense: true,
                                 leading: isMascot
-                                    ? CrushieAvatar(index: mascotIndex, radius: 16)
+                                    ? CrushieAvatar(
+                                        index: mascotIndex, radius: 16)
                                     : CircleAvatar(
                                         radius: 16,
                                         backgroundImage: NetworkImage(picUrl),
                                       ),
                                 title: Text(
                                   '@${prof['username']}',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13.5),
                                 ),
                                 subtitle: Text(
                                   '${prof['location']} • ${prof['vibe']}',
-                                  style: const TextStyle(fontSize: 11.5, color: Colors.grey),
+                                  style: const TextStyle(
+                                      fontSize: 11.5, color: Colors.grey),
                                 ),
-                                trailing: const Icon(Icons.north_west, size: 14, color: Colors.grey),
+                                trailing: const Icon(Icons.north_west,
+                                    size: 14, color: Colors.grey),
                                 onTap: () {
                                   _searchController.text = prof['username']!;
-                                  postProvider.setSearchQuery(prof['username']!);
+                                  postProvider
+                                      .setSearchQuery(prof['username']!);
                                   setState(() => _showSuggestions = false);
                                   _searchFocusNode.unfocus();
 
@@ -254,7 +287,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           // Matching Categories Section
                           if (matchingCategories.isNotEmpty) ...[
                             Padding(
-                              padding: const EdgeInsets.only(left: 16, top: 12, bottom: 4),
+                              padding: const EdgeInsets.only(
+                                  left: 16, top: 12, bottom: 4),
                               child: Text(
                                 'SUGGESTED CATEGORIES & VIBES',
                                 style: TextStyle(
@@ -268,12 +302,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                             ...matchingCategories.map((cat) {
                               return ListTile(
                                 dense: true,
-                                leading: const Icon(Icons.favorite_rounded, size: 18, color: AppColors.secondary),
+                                leading: const Icon(Icons.favorite_rounded,
+                                    size: 18, color: AppColors.secondary),
                                 title: Text(
                                   cat,
-                                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                                  style: const TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w600),
                                 ),
-                                trailing: const Icon(Icons.north_west, size: 14, color: Colors.grey),
+                                trailing: const Icon(Icons.north_west,
+                                    size: 14, color: Colors.grey),
                                 onTap: () {
                                   _searchController.text = cat;
                                   postProvider.setSearchQuery(cat);
@@ -298,12 +336,18 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         // Filter Dialog Trigger Button
                         ElevatedButton.icon(
                           onPressed: () => _showFilterDialog(context),
-                          icon: const Icon(Icons.tune_rounded, size: 16, color: Colors.white),
-                          label: const Text('Filters', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          icon: const Icon(Icons.tune_rounded,
+                              size: 16, color: Colors.white),
+                          label: const Text('Filters',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold)),
                           style: ElevatedButton.styleFrom(
-                            primary: AppColors.primary,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
                             elevation: 0,
                           ),
                         ),
@@ -322,7 +366,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                               gender: _selectedGender,
                             );
                           },
-                          selectedColor: AppColors.verifiedBlue.withOpacity(0.2),
+                          selectedColor:
+                              AppColors.verifiedBlue.withOpacity(0.2),
                           checkmarkColor: AppColors.verifiedBlue,
                         ),
                         const SizedBox(width: 8),
@@ -349,31 +394,264 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 ],
               ),
             ),
-            const Divider(height: 1),
+            const SizedBox(height: 4),
 
-            // Discovery Results Feed with Friendly Empty State
+            // Discovery Results Feed with People You May Like + Trending Meetups
             Expanded(
-              child: rankedPosts.isEmpty
-                  ? _buildFriendlyEmptyState(isDark, postProvider)
-                  : ListView.builder(
-                      itemCount: rankedPosts.length,
-                      physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.only(top: 12, bottom: 90, left: 16, right: 16),
-                      itemBuilder: (ctx, i) {
-                        final post = rankedPosts[i];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: PostCard(
-                            post: post,
-                            onTapUser: () {
-                              if (widget.onTapUser != null) {
-                                widget.onTapUser!(post.userId);
-                              }
-                            },
+              child: ListView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(top: 8, bottom: 90),
+                children: [
+                  // 1. People You May Like Section
+                  Consumer2<AuthProvider, UserProvider>(
+                    builder: (context, authProv, userProv, child) {
+                      final currentUser = authProv.currentUser;
+                      final dbService = DatabaseService();
+                      final allUsers = dbService.users.values
+                          .where((u) =>
+                              currentUser == null || u.id != currentUser.id)
+                          .toList();
+
+                      if (allUsers.isEmpty) return const SizedBox();
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'PEOPLE YOU MAY LIKE',
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.8,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                                Text(
+                                  '${allUsers.length} active',
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: isDark
+                                        ? AppColors.darkTextSecondary
+                                        : AppColors.lightTextSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        );
-                      },
-                    ),
+                          SizedBox(
+                            height: 175,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              physics: const BouncingScrollPhysics(),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              itemCount: allUsers.length,
+                              itemBuilder: (ctx, i) {
+                                final user = allUsers[i];
+                                final isFollowing = currentUser != null &&
+                                    userProv.isFollowing(user.id);
+                                final isMascot = user.profilePicUrl
+                                    .startsWith('crushie_avatar_');
+                                final mascotIdx = isMascot
+                                    ? (int.tryParse(user.profilePicUrl
+                                            .replaceAll(
+                                                'crushie_avatar_', '')) ??
+                                        0)
+                                    : 0;
+
+                                return Container(
+                                  width: 150,
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 4, vertical: 2),
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: isDark
+                                        ? AppColors.darkCard
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                        color: isDark
+                                            ? AppColors.darkBorder
+                                            : AppColors.lightBorder),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.04),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () {
+                                          if (widget.onTapUser != null) {
+                                            widget.onTapUser!(user.id);
+                                          }
+                                        },
+                                        child: Column(
+                                          children: [
+                                            Stack(
+                                              children: [
+                                                if (isMascot)
+                                                  CrushieAvatar(
+                                                      index: mascotIdx,
+                                                      radius: 23)
+                                                else
+                                                  CircleAvatar(
+                                                    radius: 23,
+                                                    backgroundImage:
+                                                        CachedNetworkImageProvider(
+                                                            user.profilePicUrl),
+                                                  ),
+                                                if (user.isOnline)
+                                                  Positioned(
+                                                    right: 0,
+                                                    bottom: 0,
+                                                    child: Container(
+                                                      width: 11,
+                                                      height: 11,
+                                                      decoration: BoxDecoration(
+                                                        color: AppColors.online,
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(
+                                                            color: isDark
+                                                                ? AppColors
+                                                                    .darkCard
+                                                                : Colors.white,
+                                                            width: 2),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Flexible(
+                                                  child: Text(
+                                                    '@${user.username}',
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 13),
+                                                  ),
+                                                ),
+                                                if (user.isVerified) ...[
+                                                  const SizedBox(width: 2),
+                                                  const Icon(Icons.verified,
+                                                      color: AppColors
+                                                          .verifiedBlue,
+                                                      size: 13),
+                                                ],
+                                              ],
+                                            ),
+                                            Text(
+                                              '${user.city} • ${user.age}y',
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontSize: 11,
+                                                  color: Colors.grey),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        height: 28,
+                                        child: OutlinedButton(
+                                          onPressed: () {
+                                            if (currentUser != null) {
+                                              userProv.toggleFollow(
+                                                currentUser.id,
+                                                user.id,
+                                                targetUsername: user.username,
+                                              );
+                                            }
+                                          },
+                                          style: OutlinedButton.styleFrom(
+                                            padding: EdgeInsets.zero,
+                                            side: BorderSide(
+                                                color: isFollowing
+                                                    ? Colors.grey
+                                                    : AppColors.primary,
+                                                width: 1.2),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14)),
+                                          ),
+                                          child: Text(
+                                            isFollowing
+                                                ? 'Following'
+                                                : '+ Follow',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: isFollowing
+                                                  ? Colors.grey
+                                                  : AppColors.primary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              'TRENDING MEETUPS & POSTS',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.8,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                        ],
+                      );
+                    },
+                  ),
+
+                  // 2. Posts & Meetups Feed
+                  if (rankedPosts.isEmpty)
+                    _buildFriendlyEmptyState(isDark, postProvider)
+                  else
+                    ...rankedPosts
+                        .map(
+                          (post) => Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 6),
+                            child: PostCard(
+                              post: post,
+                              onTapUser: () {
+                                if (widget.onTapUser != null) {
+                                  widget.onTapUser!(post.userId);
+                                }
+                              },
+                            ),
+                          ),
+                        )
+                        .toList(),
+                ],
+              ),
             ),
           ],
         ),
@@ -383,7 +661,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   // Friendly Empty State (No harsh "No results found")
   Widget _buildFriendlyEmptyState(bool isDark, PostProvider postProv) {
-    final allPosts = postProv.allPosts; // Fallback posts to show related suggestions
+    final allPosts =
+        postProv.allPosts; // Fallback posts to show related suggestions
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -409,7 +688,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+              color: isDark
+                  ? AppColors.darkTextPrimary
+                  : AppColors.lightTextPrimary,
             ),
           ),
           const SizedBox(height: 6),
@@ -419,7 +700,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13.5,
-              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+              color: isDark
+                  ? AppColors.darkTextSecondary
+                  : AppColors.lightTextSecondary,
             ),
           ),
           const SizedBox(height: 16),
@@ -437,11 +720,15 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 _selectedGender = null;
               });
             },
-            icon: const Icon(Icons.refresh_rounded, color: AppColors.primary, size: 18),
-            label: const Text('Reset All Search Filters', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            icon: const Icon(Icons.refresh_rounded,
+                color: AppColors.primary, size: 18),
+            label: const Text('Reset All Search Filters',
+                style: TextStyle(
+                    color: AppColors.primary, fontWeight: FontWeight.bold)),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: AppColors.primary),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
             ),
           ),
           const SizedBox(height: 28),
@@ -464,18 +751,18 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
           // Display 2-3 fallback posts/profiles
           ...allPosts.take(3).map(
-            (p) => Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: PostCard(
-                post: p,
-                onTapUser: () {
-                  if (widget.onTapUser != null) {
-                    widget.onTapUser!(p.userId);
-                  }
-                },
+                (p) => Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: PostCard(
+                    post: p,
+                    onTapUser: () {
+                      if (widget.onTapUser != null) {
+                        widget.onTapUser!(p.userId);
+                      }
+                    },
+                  ),
+                ),
               ),
-            ),
-          ),
         ],
       ),
     );
@@ -483,109 +770,136 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   // Filter Bottom Sheet Dialog
   void _showFilterDialog(BuildContext context) {
+    final postProv = Provider.of<PostProvider>(context, listen: false);
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.darkCard : Colors.white,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? AppColors.darkCard
+          : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            final postProv = Provider.of<PostProvider>(context, listen: false);
+          builder: (modalCtx, setModalState) {
+            final isDark = Theme.of(modalCtx).brightness == Brightness.dark;
 
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Filter Discover Feed',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Country Filter
-                  DropdownButtonFormField<String>(
-                    value: _selectedCountry,
-                    hint: const Text('Select Country'),
-                    decoration: const InputDecoration(
-                      labelText: 'Country',
-                      prefixIcon: Icon(Icons.public_outlined, color: AppColors.primary),
-                    ),
-                    items: AppConstants.countries.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                    onChanged: (val) => setModalState(() => _selectedCountry = val),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Gender Filter
-                  DropdownButtonFormField<String>(
-                    value: _selectedGender,
-                    hint: const Text('Select Gender'),
-                    decoration: const InputDecoration(
-                      labelText: 'Gender',
-                      prefixIcon: Icon(Icons.person_outline, color: AppColors.primary),
-                    ),
-                    items: AppConstants.genderOptions.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-                    onChanged: (val) => setModalState(() => _selectedGender = val),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Action Buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () {
-                            setModalState(() {
-                              _selectedCountry = null;
-                              _selectedGender = null;
-                              _verifiedOnly = false;
-                              _premiumOnly = false;
-                            });
-                            postProv.clearFilters();
-                            Navigator.pop(ctx);
-                          },
-                          child: const Text('Reset All'),
+            return SingleChildScrollView(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 24,
+                  right: 24,
+                  top: 24,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () {
-                            postProv.setFilters(
-                              country: _selectedCountry,
-                              gender: _selectedGender,
-                              verifiedOnly: _verifiedOnly,
-                              premiumOnly: _premiumOnly,
-                            );
-                            Navigator.pop(ctx);
-                          },
-                          style: ElevatedButton.styleFrom(primary: AppColors.primary),
-                          child: const Text('Apply Filters', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Filter Discover Feed',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: isDark
+                            ? AppColors.darkTextPrimary
+                            : AppColors.lightTextPrimary,
                       ),
-                    ],
-                  ),
-                ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Country Filter
+                    DropdownButtonFormField<String>(
+                      value: _selectedCountry,
+                      hint: const Text('Select Country'),
+                      decoration: const InputDecoration(
+                        labelText: 'Country',
+                        prefixIcon: Icon(Icons.public_outlined,
+                            color: AppColors.primary),
+                      ),
+                      items: AppConstants.countries
+                          .map(
+                              (c) => DropdownMenuItem(value: c, child: Text(c)))
+                          .toList(),
+                      onChanged: (val) =>
+                          setModalState(() => _selectedCountry = val),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Gender Filter
+                    DropdownButtonFormField<String>(
+                      value: _selectedGender,
+                      hint: const Text('Select Gender'),
+                      decoration: const InputDecoration(
+                        labelText: 'Gender',
+                        prefixIcon: Icon(Icons.person_outline,
+                            color: AppColors.primary),
+                      ),
+                      items: AppConstants.genderOptions
+                          .map(
+                              (g) => DropdownMenuItem(value: g, child: Text(g)))
+                          .toList(),
+                      onChanged: (val) =>
+                          setModalState(() => _selectedGender = val),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Action Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              setState(() {
+                                _selectedCountry = null;
+                                _selectedGender = null;
+                                _verifiedOnly = false;
+                                _premiumOnly = false;
+                              });
+                              postProv.clearFilters();
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Reset All'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() {});
+                              postProv.setFilters(
+                                country: _selectedCountry,
+                                gender: _selectedGender,
+                                verifiedOnly: _verifiedOnly,
+                                premiumOnly: _premiumOnly,
+                              );
+                              Navigator.pop(ctx);
+                            },
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primary),
+                            child: const Text('Apply Filters',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             );
           },

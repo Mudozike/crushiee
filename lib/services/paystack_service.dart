@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../config/app_colors.dart';
 
 enum PaymentMethod { mpesa, airtel, card }
@@ -8,16 +9,19 @@ class PaymentResult {
   final bool success;
   final String transactionId;
   final String message;
+  final String paymentMethod;
 
   PaymentResult({
     required this.success,
     required this.transactionId,
     required this.message,
+    this.paymentMethod = 'mpesa',
   });
 }
 
 class PaystackService {
-  static const String _paystackPublicKey = 'pk_test_crushie_paystack_key';
+  static String get paystackPublicKey =>
+      dotenv.env['PAYSTACK_PUBLIC_KEY'] ?? 'pk_test_crushie_paystack_key_55a9b2c';
 
   // Process payment using bottom sheet modal dialog for M-PESA, Airtel, or Card
   static Future<PaymentResult?> showPaymentDialog({
@@ -325,6 +329,7 @@ class _PaystackPaymentSheetState extends State<_PaystackPaymentSheet> {
         success: true,
         transactionId: txId,
         message: 'Payment of KES ${widget.amountKES.toStringAsFixed(0)} successful!',
+        paymentMethod: _selectedMethod.name,
       ),
     );
   }

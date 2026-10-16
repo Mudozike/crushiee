@@ -6,6 +6,7 @@ import '../../config/app_colors.dart';
 import '../../models/notification_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../widgets/crushie_avatar.dart';
 
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({Key? key}) : super(key: key);
@@ -24,6 +25,15 @@ class NotificationsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notifications'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.done_all),
+            tooltip: 'Mark all as read',
+            onPressed: () {
+              notifProv.markAllAsRead(currentUser.id);
+            },
+          ),
+        ],
       ),
       body: notifs.isEmpty
           ? Center(
@@ -47,6 +57,10 @@ class NotificationsScreen extends StatelessWidget {
               itemCount: notifs.length,
               itemBuilder: (ctx, i) {
                 final n = notifs[i];
+                final isMascot = n.fromUserProfilePic.startsWith('crushie_avatar_') || n.fromUserProfilePic.isEmpty;
+                final mascotIdx = isMascot
+                    ? (int.tryParse(n.fromUserProfilePic.replaceAll('crushie_avatar_', '')) ?? 0)
+                    : 0;
 
                 return Container(
                   color: n.isRead
@@ -54,14 +68,17 @@ class NotificationsScreen extends StatelessWidget {
                       : (isDark ? AppColors.primary.withOpacity(0.08) : AppColors.primary.withOpacity(0.04)),
                   child: ListTile(
                     onTap: () {
-                      notifProv.markAsRead(n.id);
+                      notifProv.markAsRead(currentUser.id, n.id);
                     },
                     leading: Stack(
                       children: [
-                        CircleAvatar(
-                          radius: 24,
-                          backgroundImage: CachedNetworkImageProvider(n.fromUserProfilePic),
-                        ),
+                        if (isMascot)
+                          CrushieAvatar(index: mascotIdx, radius: 24)
+                        else
+                          CircleAvatar(
+                            radius: 24,
+                            backgroundImage: CachedNetworkImageProvider(n.fromUserProfilePic),
+                          ),
                         Positioned(
                           right: 0,
                           bottom: 0,

@@ -24,7 +24,8 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStateMixin {
+class _LoginScreenState extends State<LoginScreen>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -34,7 +35,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   late Animation<double> _fadeAnim;
 
   bool get _isFormReady =>
-      _emailController.text.contains('@') && _passwordController.text.isNotEmpty;
+      _emailController.text.contains('@') &&
+      _passwordController.text.isNotEmpty;
 
   @override
   void initState() {
@@ -71,12 +73,14 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         return true;
       },
       child: Scaffold(
-        backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
+        backgroundColor:
+            isDark ? AppColors.darkBackground : AppColors.lightBackground,
         appBar: AppBar(
           elevation: 0,
           backgroundColor: Colors.transparent,
           leading: IconButton(
-            icon: Icon(Icons.arrow_back, color: isDark ? Colors.white : Colors.black87),
+            icon: Icon(Icons.arrow_back,
+                color: isDark ? Colors.white : Colors.black87),
             onPressed: () {
               if (widget.onBack != null) {
                 widget.onBack!();
@@ -91,7 +95,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             builder: (context, constraints) {
               return SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 460),
@@ -116,7 +121,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                 fontSize: 28,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: -0.5,
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                             ),
                             const SizedBox(height: 6),
@@ -127,7 +134,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 14,
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                color: isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary,
                               ),
                             ),
                             const SizedBox(height: 28),
@@ -135,12 +144,50 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             // 2. Google Authentication
                             GoogleSignInButton(
                               text: 'Continue with Google',
-                              onPressed: () async {
-                                final success = await authProv.signInWithGoogle();
-                                if (success) {
-                                  widget.onLoginSuccess();
-                                }
-                              },
+                              onPressed: authProv.isLoading
+                                  ? null
+                                  : () async {
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final success =
+                                          await authProv.signInWithGoogle();
+                                      if (!mounted) return;
+
+                                      if (success) {
+                                        widget.onLoginSuccess();
+                                      } else {
+                                        if (authProv.errorMessage != null) {
+                                          final errorMsg =
+                                              authProv.errorMessage!;
+                                          final isProviderConflict = authProv
+                                                      .errorCode ==
+                                                  'account-exists-with-different-credential' ||
+                                              errorMsg.toLowerCase().contains(
+                                                  'another sign-in method');
+
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text(errorMsg),
+                                              backgroundColor:
+                                                  Colors.red.shade700,
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              duration:
+                                                  const Duration(seconds: 5),
+                                              action: isProviderConflict
+                                                  ? SnackBarAction(
+                                                      label: 'Reset',
+                                                      textColor:
+                                                          Colors.amberAccent,
+                                                      onPressed: widget
+                                                          .onForgotPasswordTap,
+                                                    )
+                                                  : null,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
                             ),
                             const SizedBox(height: 20),
 
@@ -148,14 +195,20 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             Row(
                               children: [
                                 Expanded(
-                                  child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  child: Divider(
+                                      color: isDark
+                                          ? AppColors.darkBorder
+                                          : AppColors.lightBorder),
                                 ),
                                 Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16),
                                   child: Text(
                                     'OR',
                                     style: TextStyle(
-                                      color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                      color: isDark
+                                          ? AppColors.darkTextSecondary
+                                          : AppColors.lightTextSecondary,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w800,
                                       letterSpacing: 1.0,
@@ -163,7 +216,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                   ),
                                 ),
                                 Expanded(
-                                  child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  child: Divider(
+                                      color: isDark
+                                          ? AppColors.darkBorder
+                                          : AppColors.lightBorder),
                                 ),
                               ],
                             ),
@@ -176,35 +232,46 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               autofillHints: const [AutofillHints.email],
                               onChanged: (_) => setState(() {}),
                               style: TextStyle(
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                               decoration: InputDecoration(
                                 labelText: 'Email Address',
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                prefixIcon: const Icon(Icons.email_outlined, color: AppColors.primary),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                floatingLabelBehavior:
+                                    FloatingLabelBehavior.auto,
+                                prefixIcon: const Icon(Icons.email_outlined,
+                                    color: AppColors.primary),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 16),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
                                   borderSide: BorderSide(
-                                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                                    color: isDark
+                                        ? AppColors.darkBorder
+                                        : AppColors.lightBorder,
                                     width: 1.2,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: AppColors.primary, width: 2),
                                 ),
                                 errorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 1.2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 1.2),
                                 ),
                                 focusedErrorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 2),
                                 ),
                               ),
-                              validator: (v) =>
-                                  (v == null || !v.contains('@')) ? 'Enter a valid email address' : null,
+                              validator: (v) => (v == null || !v.contains('@'))
+                                  ? 'Enter a valid email address'
+                                  : null,
                             ),
                             const SizedBox(height: 16),
 
@@ -215,41 +282,58 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               autofillHints: const [AutofillHints.password],
                               onChanged: (_) => setState(() {}),
                               style: TextStyle(
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                                color: isDark
+                                    ? AppColors.darkTextPrimary
+                                    : AppColors.lightTextPrimary,
                               ),
                               decoration: InputDecoration(
                                 labelText: 'Password',
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                prefixIcon: const Icon(Icons.lock_outline, color: AppColors.primary),
+                                floatingLabelBehavior:
+                                    FloatingLabelBehavior.auto,
+                                prefixIcon: const Icon(Icons.lock_outline,
+                                    color: AppColors.primary),
                                 suffixIcon: IconButton(
                                   icon: Icon(
-                                    _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                    _obscurePassword
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    color: isDark
+                                        ? AppColors.darkTextSecondary
+                                        : AppColors.lightTextSecondary,
                                   ),
-                                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                                  onPressed: () => setState(() =>
+                                      _obscurePassword = !_obscurePassword),
                                 ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 16),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
                                   borderSide: BorderSide(
-                                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                                    color: isDark
+                                        ? AppColors.darkBorder
+                                        : AppColors.lightBorder,
                                     width: 1.2,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: AppColors.primary, width: 2),
                                 ),
                                 errorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 1.2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 1.2),
                                 ),
                                 focusedErrorBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: const BorderSide(color: Colors.red, width: 2),
+                                  borderSide: const BorderSide(
+                                      color: Colors.red, width: 2),
                                 ),
                               ),
-                              validator: (v) => (v == null || v.isEmpty) ? 'Enter your password' : null,
+                              validator: (v) => (v == null || v.isEmpty)
+                                  ? 'Enter your password'
+                                  : null,
                             ),
 
                             // Forgot Password Link
@@ -274,15 +358,67 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               text: 'Sign In',
                               height: 56,
                               isLoading: authProv.isLoading,
-                              onPressed: _isFormReady
+                              onPressed: (_isFormReady && !authProv.isLoading)
                                   ? () async {
                                       if (_formKey.currentState!.validate()) {
-                                        final success = await authProv.signInWithEmail(
+                                        final messenger =
+                                            ScaffoldMessenger.of(context);
+                                        final success =
+                                            await authProv.signInWithEmail(
                                           _emailController.text.trim(),
                                           _passwordController.text.trim(),
                                         );
+                                        if (!mounted) return;
+
                                         if (success) {
                                           widget.onLoginSuccess();
+                                        } else {
+                                          final errorMsg = authProv
+                                                  .errorMessage ??
+                                              'Sign in failed. Please try again.';
+                                          final isUserNotFound = authProv
+                                                      .errorCode ==
+                                                  'user-not-found' ||
+                                              errorMsg
+                                                  .toLowerCase()
+                                                  .contains('no account found');
+                                          final isWrongPassword =
+                                              authProv.errorCode ==
+                                                      'wrong-password' ||
+                                                  authProv.errorCode ==
+                                                      'invalid-credential' ||
+                                                  errorMsg
+                                                      .toLowerCase()
+                                                      .contains('incorrect');
+
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text(errorMsg),
+                                              backgroundColor:
+                                                  Colors.red.shade700,
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              duration:
+                                                  const Duration(seconds: 5),
+                                              action: isUserNotFound
+                                                  ? SnackBarAction(
+                                                      label: 'Sign Up',
+                                                      textColor:
+                                                          Colors.amberAccent,
+                                                      onPressed:
+                                                          widget.onSignUpTap,
+                                                    )
+                                                  : isWrongPassword
+                                                      ? SnackBarAction(
+                                                          label: 'Reset',
+                                                          textColor: Colors
+                                                              .amberAccent,
+                                                          onPressed: widget
+                                                              .onForgotPasswordTap,
+                                                        )
+                                                      : null,
+                                            ),
+                                          );
                                         }
                                       }
                                     }
@@ -291,8 +427,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             const SizedBox(height: 28),
 
                             // 6. Footer: DIRECT NAVIGATION TO CREATE ACCOUNT (NO LANDING REDIRECT!)
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                            Wrap(
+                              alignment: WrapAlignment.center,
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
                                 Text(
                                   'Don\'t have an account? ',
@@ -304,7 +441,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                   ),
                                 ),
                                 GestureDetector(
-                                  onTap: widget.onSignUpTap, // DIRECT TO SIGN UP
+                                  onTap:
+                                      widget.onSignUpTap, // DIRECT TO SIGN UP
                                   child: const Text(
                                     'Create Account',
                                     style: TextStyle(

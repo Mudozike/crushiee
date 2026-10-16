@@ -119,13 +119,16 @@ class ContactRevealCard extends StatelessWidget {
                           color: isBlocked ? Colors.grey : Colors.green,
                         ),
                         const SizedBox(width: 4),
-                        Text(
-                          'UNLOCKED CONTACT METHOD',
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.bold,
-                            color: isBlocked ? Colors.grey : Colors.green.shade700,
-                            letterSpacing: 0.5,
+                        Flexible(
+                          child: Text(
+                            'UNLOCKED CONTACT METHOD',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                              color: isBlocked ? Colors.grey : Colors.green.shade700,
+                              letterSpacing: 0.5,
+                            ),
                           ),
                         ),
                       ],
@@ -159,7 +162,7 @@ class ContactRevealCard extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
                 ),
                 style: ElevatedButton.styleFrom(
-                  primary: _badgeColor,
+                  backgroundColor: _badgeColor,
                   elevation: 0,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),

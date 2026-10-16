@@ -108,7 +108,7 @@ class TermsAndConditionsModal extends StatelessWidget {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(primary: AppColors.primary),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
               child: const Text('I Understand & Agree', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ),

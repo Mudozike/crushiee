@@ -63,12 +63,15 @@ class CategorySidebarDrawer extends StatelessWidget {
                         child: const Icon(Icons.tune_rounded, color: AppColors.primary, size: 20),
                       ),
                       const SizedBox(width: 12),
-                      Text(
-                        'Categories & Filters',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                      Flexible(
+                        child: Text(
+                          'Categories & Filters',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                          ),
                         ),
                       ),
                     ],
@@ -144,7 +147,7 @@ class CategorySidebarDrawer extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(
-                    primary: AppColors.primary,
+                    backgroundColor: AppColors.primary,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
                     elevation: 0,
                   ),

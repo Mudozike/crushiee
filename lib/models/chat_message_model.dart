@@ -4,26 +4,38 @@ class ChatMessageModel {
   final String id;
   final String connectionId;
   final String senderId;
-  final String recipientId;
-  final String message;
-  final DateTime timestamp;
+  final String receiverId;
+  final String content;
+  final String? mediaUrl;
+  final DateTime createdAt;
   final bool isRead;
   final MessageDeliveryStatus deliveryStatus;
   final bool isDeletedForEveryone;
   final List<String> deletedForUserIds;
 
+  // Backward compatibility getters
+  String get recipientId => receiverId;
+  String get message => content;
+  DateTime get timestamp => createdAt;
+
   ChatMessageModel({
     required this.id,
     required this.connectionId,
     required this.senderId,
-    required this.recipientId,
-    required this.message,
+    String? receiverId,
+    String? recipientId,
+    String? content,
+    String? message,
+    this.mediaUrl,
+    DateTime? createdAt,
     DateTime? timestamp,
     this.isRead = false,
     MessageDeliveryStatus? deliveryStatus,
     this.isDeletedForEveryone = false,
     this.deletedForUserIds = const [],
-  })  : timestamp = timestamp ?? DateTime.now(),
+  })  : receiverId = receiverId ?? recipientId ?? '',
+        content = content ?? message ?? '',
+        createdAt = createdAt ?? timestamp ?? DateTime.now(),
         deliveryStatus = deliveryStatus ?? (isRead ? MessageDeliveryStatus.read : MessageDeliveryStatus.delivered);
 
   Map<String, dynamic> toMap() {
@@ -31,9 +43,13 @@ class ChatMessageModel {
       'id': id,
       'connectionId': connectionId,
       'senderId': senderId,
-      'recipientId': recipientId,
-      'message': message,
-      'timestamp': timestamp.toIso8601String(),
+      'receiverId': receiverId,
+      'recipientId': receiverId,
+      'content': content,
+      'message': content,
+      'mediaUrl': mediaUrl,
+      'createdAt': createdAt.toIso8601String(),
+      'timestamp': createdAt.toIso8601String(),
       'isRead': isRead,
       'deliveryStatus': deliveryStatus.name,
       'isDeletedForEveryone': isDeletedForEveryone,
@@ -42,15 +58,18 @@ class ChatMessageModel {
   }
 
   factory ChatMessageModel.fromMap(Map<String, dynamic> map, String id) {
+    final created = map['createdAt'] != null
+        ? DateTime.tryParse(map['createdAt'])
+        : (map['timestamp'] != null ? DateTime.tryParse(map['timestamp']) : DateTime.now());
+
     return ChatMessageModel(
       id: id,
       connectionId: map['connectionId'] ?? '',
       senderId: map['senderId'] ?? '',
-      recipientId: map['recipientId'] ?? '',
-      message: map['message'] ?? '',
-      timestamp: map['timestamp'] != null
-          ? DateTime.tryParse(map['timestamp']) ?? DateTime.now()
-          : DateTime.now(),
+      receiverId: map['receiverId'] ?? map['recipientId'] ?? '',
+      content: map['content'] ?? map['message'] ?? '',
+      mediaUrl: map['mediaUrl'],
+      createdAt: created ?? DateTime.now(),
       isRead: map['isRead'] ?? false,
       deliveryStatus: MessageDeliveryStatus.values.firstWhere(
         (e) => e.name == map['deliveryStatus'],
@@ -62,7 +81,8 @@ class ChatMessageModel {
   }
 
   ChatMessageModel copyWith({
-    String? message,
+    String? content,
+    String? mediaUrl,
     bool? isRead,
     MessageDeliveryStatus? deliveryStatus,
     bool? isDeletedForEveryone,
@@ -72,9 +92,10 @@ class ChatMessageModel {
       id: id,
       connectionId: connectionId,
       senderId: senderId,
-      recipientId: recipientId,
-      message: message ?? this.message,
-      timestamp: timestamp,
+      receiverId: receiverId,
+      content: content ?? this.content,
+      mediaUrl: mediaUrl ?? this.mediaUrl,
+      createdAt: createdAt,
       isRead: isRead ?? this.isRead,
       deliveryStatus: deliveryStatus ?? this.deliveryStatus,
       isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,

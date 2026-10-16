@@ -9,10 +9,11 @@ class UserModel {
   final String bio;
   final String profilePicUrl;
   final String preferredContactMethod; // WhatsApp, Telegram, Phone Call, Email
-  final String contactDetails;         // Private details revealed after payment
+  final String contactDetails; // Private details revealed after payment
   final bool isVerified;
   final DateTime? verifiedExpiry;
-  final String? verificationPhoto;     // Firebase Storage URL: verification/{userId}/photo.jpg
+  final String?
+      verificationPhoto; // Firebase Storage URL: verification/{userId}/photo.jpg
   final bool isPremium;
   final DateTime? premiumExpiry;
   final int dailyConnections;
@@ -23,6 +24,7 @@ class UserModel {
   final int followingCount;
   final List<String> communities;
   final List<String> blockedUserIds;
+  final bool profileCompleted;
   final bool isOnline;
   final DateTime lastSeen;
   final DateTime createdAt;
@@ -39,6 +41,7 @@ class UserModel {
     required this.profilePicUrl,
     required this.preferredContactMethod,
     required this.contactDetails,
+    this.profileCompleted = false,
     this.isVerified = false,
     this.verifiedExpiry,
     this.verificationPhoto,
@@ -89,9 +92,11 @@ class UserModel {
     return monthlyConnections;
   }
 
-  bool get isDailyLimitReached => !isPremium && activeDailyConnections >= 2;
-  bool get isMonthlyLimitReached => !isPremium && activeMonthlyConnections >= 20;
-  bool get canConnectFree => isPremium || (!isDailyLimitReached && !isMonthlyLimitReached);
+  bool get isDailyLimitReached => !isPremium && activeDailyConnections >= 10;
+  bool get isMonthlyLimitReached =>
+      !isPremium && activeMonthlyConnections >= 60;
+  bool get canConnectFree =>
+      isPremium || (!isDailyLimitReached && !isMonthlyLimitReached);
 
   Map<String, dynamic> toMap() {
     return {
@@ -119,6 +124,7 @@ class UserModel {
       'followingCount': followingCount,
       'communities': communities,
       'blockedUserIds': blockedUserIds,
+      'profileCompleted': profileCompleted,
       'isOnline': isOnline,
       'lastSeen': lastSeen.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
@@ -140,15 +146,26 @@ class UserModel {
       profilePicUrl: map['profilePicUrl'] ?? '',
       preferredContactMethod: map['preferredContactMethod'] ?? 'WhatsApp',
       contactDetails: map['contactDetails'] ?? '',
+      profileCompleted: map['profileCompleted'] is bool
+          ? map['profileCompleted'] as bool
+          : (map['bio'] != null && (map['bio'] as String).trim().isNotEmpty),
       isVerified: map['isVerified'] ?? false,
-      verifiedExpiry: map['verifiedExpiry'] != null ? DateTime.tryParse(map['verifiedExpiry']) : null,
+      verifiedExpiry: map['verifiedExpiry'] != null
+          ? DateTime.tryParse(map['verifiedExpiry'])
+          : null,
       verificationPhoto: map['verificationPhoto'],
       isPremium: map['isPremium'] ?? false,
-      premiumExpiry: map['premiumExpiry'] != null ? DateTime.tryParse(map['premiumExpiry']) : null,
+      premiumExpiry: map['premiumExpiry'] != null
+          ? DateTime.tryParse(map['premiumExpiry'])
+          : null,
       dailyConnections: map['dailyConnections'] ?? 0,
-      dailyConnectionsDate: map['dailyConnectionsDate'] != null ? DateTime.tryParse(map['dailyConnectionsDate']) : null,
+      dailyConnectionsDate: map['dailyConnectionsDate'] != null
+          ? DateTime.tryParse(map['dailyConnectionsDate'])
+          : null,
       monthlyConnections: map['monthlyConnections'] ?? 0,
-      monthlyConnectionsMonth: map['monthlyConnectionsMonth'] != null ? DateTime.tryParse(map['monthlyConnectionsMonth']) : null,
+      monthlyConnectionsMonth: map['monthlyConnectionsMonth'] != null
+          ? DateTime.tryParse(map['monthlyConnectionsMonth'])
+          : null,
       followersCount: map['followersCount'] ?? 0,
       followingCount: map['followingCount'] ?? 0,
       communities: List<String>.from(map['communities'] ?? []),
@@ -173,6 +190,7 @@ class UserModel {
     String? profilePicUrl,
     String? preferredContactMethod,
     String? contactDetails,
+    bool? profileCompleted,
     bool? isVerified,
     DateTime? verifiedExpiry,
     String? verificationPhoto,
@@ -199,8 +217,10 @@ class UserModel {
       gender: gender ?? this.gender,
       bio: bio ?? this.bio,
       profilePicUrl: profilePicUrl ?? this.profilePicUrl,
-      preferredContactMethod: preferredContactMethod ?? this.preferredContactMethod,
+      preferredContactMethod:
+          preferredContactMethod ?? this.preferredContactMethod,
       contactDetails: contactDetails ?? this.contactDetails,
+      profileCompleted: profileCompleted ?? this.profileCompleted,
       isVerified: isVerified ?? this.isVerified,
       verifiedExpiry: verifiedExpiry ?? this.verifiedExpiry,
       verificationPhoto: verificationPhoto ?? this.verificationPhoto,
@@ -209,7 +229,8 @@ class UserModel {
       dailyConnections: dailyConnections ?? this.dailyConnections,
       dailyConnectionsDate: dailyConnectionsDate ?? this.dailyConnectionsDate,
       monthlyConnections: monthlyConnections ?? this.monthlyConnections,
-      monthlyConnectionsMonth: monthlyConnectionsMonth ?? this.monthlyConnectionsMonth,
+      monthlyConnectionsMonth:
+          monthlyConnectionsMonth ?? this.monthlyConnectionsMonth,
       followersCount: followersCount ?? this.followersCount,
       followingCount: followingCount ?? this.followingCount,
       communities: communities ?? this.communities,

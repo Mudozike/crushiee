@@ -72,19 +72,23 @@ class _GradientButtonState extends State<GradientButton> {
                   )
                 : Row(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
                     children: [
                       if (widget.icon != null) ...[
                         Icon(widget.icon, color: Colors.white, size: 20),
                         const SizedBox(width: 8),
                       ],
-                      Text(
-                        widget.text,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.3,
+                      Flexible(
+                        child: Text(
+                          widget.text,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.3,
+                          ),
                         ),
                       ),
                     ],

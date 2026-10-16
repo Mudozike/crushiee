@@ -4,6 +4,7 @@ import '../models/post_model.dart';
 import '../models/user_model.dart';
 import '../models/transaction_model.dart';
 import '../services/database_service.dart';
+import '../services/firestore_service.dart';
 import '../services/paystack_service.dart';
 
 class BoostPostModal extends StatefulWidget {
@@ -43,10 +44,11 @@ class _BoostPostModalState extends State<BoostPostModal> {
         color: isDark ? AppColors.darkCard : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
           Center(
             child: Container(
               width: 40,
@@ -139,21 +141,33 @@ class _BoostPostModalState extends State<BoostPostModal> {
                 );
 
                 if (res != null && res.success) {
-                  dbService.recordTransaction(
-                    TransactionModel(
-                      id: res.transactionId,
-                      userId: widget.currentUser.id,
-                      type: 'boost',
-                      amount: amount,
-                      paymentReference: res.transactionId,
-                      status: 'success',
-                    ),
+                  final tx = TransactionModel(
+                    id: res.transactionId,
+                    userId: widget.currentUser.id,
+                    type: 'boost',
+                    amount: amount,
+                    paymentMethod: res.paymentMethod,
+                    paymentReference: res.transactionId,
+                    status: 'completed',
+                    metadata: {
+                      'postId': widget.post.id,
+                      'duration': _selectedOption,
+                      'hours': hours,
+                    },
                   );
+                  await FirestoreService().saveTransaction(tx);
 
-                  dbService.boostPost(widget.post.id, hours);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('⚡ Post Boosted Successfully! Your post is now pinned near the top of the feed.')),
+                  final updatedPost = widget.post.copyWith(
+                    isBoosted: true,
+                    boostExpiresAt: DateTime.now().add(Duration(hours: hours)),
                   );
+                  await FirestoreService().createPost(updatedPost);
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('⚡ Post Boosted Successfully! Your post is now pinned near the top of the feed.')),
+                    );
+                  }
                 }
               },
               style: ElevatedButton.styleFrom(
@@ -182,8 +196,9 @@ class _BoostPostModalState extends State<BoostPostModal> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildOptionTile({
     required String id,

@@ -44,3 +44,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+.gradle/
+
+# Environment and sensitive configuration
+.env
+*.env
+*.bak

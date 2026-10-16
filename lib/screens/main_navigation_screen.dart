@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/app_colors.dart';
+import '../providers/auth_provider.dart';
+import '../providers/user_provider.dart';
+import '../providers/notification_provider.dart';
 import '../providers/post_provider.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/crushie_logo.dart';
@@ -32,11 +35,30 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  String? _initializedFollowUserId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final authProv = Provider.of<AuthProvider>(context);
+    final currentUser = authProv.currentUser;
+    if (currentUser != null && _initializedFollowUserId != currentUser.id) {
+      _initializedFollowUserId = currentUser.id;
+      Provider.of<UserProvider>(context, listen: false)
+          .initUserFollowing(currentUser.id);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final postProv = Provider.of<PostProvider>(context);
+    final authProv = Provider.of<AuthProvider>(context);
+    final notifProv = Provider.of<NotificationProvider>(context);
+    final currentUser = authProv.currentUser;
+
+    final unreadNotifs =
+        currentUser != null ? notifProv.getUnreadCount(currentUser.id) : 0;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -49,7 +71,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       appBar: CustomAppBar(
         activeFilterName: postProv.selectedCommunity,
         onTapFilter: () {
-          _scaffoldKey.currentState?.openEndDrawer();
+          HomeFeedScreen.showFilterBottomSheet(context);
         },
         onTapNotifications: () {
           Navigator.push(
@@ -169,7 +191,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           type: BottomNavigationBarType.fixed,
           backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
           selectedItemColor: AppColors.primary,
-          unselectedItemColor: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+          unselectedItemColor: isDark
+              ? AppColors.darkTextSecondary
+              : AppColors.lightTextSecondary,
           selectedFontSize: 11,
           unselectedFontSize: 11,
           items: [

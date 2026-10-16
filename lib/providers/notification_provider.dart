@@ -1,33 +1,60 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/notification_model.dart';
-import '../services/database_service.dart';
+import '../services/firestore_service.dart';
 
 class NotificationProvider extends ChangeNotifier {
-  final DatabaseService _db = DatabaseService();
+  final FirestoreService _firestoreService = FirestoreService();
 
-  NotificationProvider() {
-    _db.addListener(_onDbChanged);
-  }
+  List<NotificationModel> _notifications = [];
+  List<NotificationModel> get notifications =>
+      List.unmodifiable(_notifications);
 
-  void _onDbChanged() {
-    notifyListeners();
+  StreamSubscription<List<NotificationModel>>? _subscription;
+  String? _currentUserId;
+
+  void initUserNotifications(String userId) {
+    if (_currentUserId == userId && _subscription != null) return;
+    _currentUserId = userId;
+    _subscription?.cancel();
+
+    _subscription =
+        _firestoreService.getNotificationsStream(userId).listen((data) {
+      _notifications = data;
+      notifyListeners();
+    });
   }
 
   @override
   void dispose() {
-    _db.removeListener(_onDbChanged);
+    _subscription?.cancel();
     super.dispose();
   }
 
+  /// Cancels active notification subscription and clears cached notifications on logout.
+  void clear() {
+    _subscription?.cancel();
+    _subscription = null;
+    _currentUserId = null;
+    _notifications = [];
+    notifyListeners();
+  }
+
   List<NotificationModel> getNotificationsForUser(String userId) {
-    return _db.notifications.where((n) => n.userId == userId).toList();
+    initUserNotifications(userId);
+    return _notifications;
   }
 
   int getUnreadCount(String userId) {
-    return _db.notifications.where((n) => n.userId == userId && !n.isRead).length;
+    initUserNotifications(userId);
+    return _notifications.where((n) => !n.isRead).length;
   }
 
-  void markAsRead(String notifId) {
-    _db.markNotificationAsRead(notifId);
+  void markAsRead(String userId, String notifId) {
+    _firestoreService.markNotificationAsRead(userId, notifId);
+  }
+
+  void markAllAsRead(String userId) {
+    _firestoreService.markAllNotificationsAsRead(userId);
   }
 }

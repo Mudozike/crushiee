@@ -4,15 +4,22 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../config/app_colors.dart';
 import '../models/post_model.dart';
 import '../models/user_model.dart';
+import '../models/crush_comment_model.dart';
+import '../models/report_model.dart';
 import '../providers/auth_provider.dart';
+import '../providers/user_provider.dart';
 import '../providers/post_provider.dart';
 import '../providers/connection_provider.dart';
 import '../services/database_service.dart';
 import 'status_badge.dart';
 import 'crushie_avatar.dart';
 import 'boost_post_modal.dart';
+import 'post_video_player.dart';
+import 'report_modal.dart';
 
-class PostCard extends StatelessWidget {
+import '../screens/post/create_post_screen.dart';
+
+class PostCard extends StatefulWidget {
   final PostModel post;
   final VoidCallback? onTapUser;
 
@@ -21,6 +28,13 @@ class PostCard extends StatelessWidget {
     required this.post,
     this.onTapUser,
   }) : super(key: key);
+
+  @override
+  State<PostCard> createState() => _PostCardState();
+}
+
+class _PostCardState extends State<PostCard> {
+  bool _isExpanded = false;
 
   String _formatPostTime(DateTime createdAt) {
     final now = DateTime.now();
@@ -40,27 +54,76 @@ class PostCard extends StatelessWidget {
   }
 
   bool get isDatingCommunity {
-    final lower = post.community.toLowerCase();
-    return !lower.contains('advice') && !lower.contains('confession') && !lower.contains('stress');
+    final lower = widget.post.community.toLowerCase();
+    return !lower.contains('advice') &&
+        !lower.contains('confession') &&
+        !lower.contains('stress');
+  }
+
+  void _confirmDeletePost(BuildContext context, String userId) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Post?'),
+        content: const Text(
+            'Are you sure you want to delete this post? This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Provider.of<PostProvider>(context, listen: false)
+                  .deletePost(widget.post.id, userId);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Post deleted.')),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openEditPost(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreatePostScreen(
+          existingPost: widget.post,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final authProvider = Provider.of<AuthProvider>(context);
+    final userProvider = Provider.of<UserProvider>(context);
     final postProvider = Provider.of<PostProvider>(context);
     final connProvider = Provider.of<ConnectionProvider>(context);
     final dbService = DatabaseService();
     final currentUser = authProvider.currentUser;
 
-    final isCrushed = currentUser != null && post.crushedUserIds.contains(currentUser.id);
-    final isSelf = currentUser != null && currentUser.id == post.userId;
-    final isFollowing = dbService.isFollowing(post.userId);
+    final isCrushed = currentUser != null &&
+        widget.post.crushedUserIds.contains(currentUser.id);
+    final isSelf = currentUser != null && currentUser.id == widget.post.userId;
+    final isFollowing = userProvider.isFollowing(widget.post.userId);
 
-    final isMascotAvatar = post.userProfilePic.startsWith('crushie_avatar_');
+    final isMascotAvatar =
+        widget.post.userProfilePic.startsWith('crushie_avatar_');
     final mascotIndex = isMascotAvatar
-        ? (int.tryParse(post.userProfilePic.replaceAll('crushie_avatar_', '')) ?? 0)
+        ? (int.tryParse(
+                widget.post.userProfilePic.replaceAll('crushie_avatar_', '')) ??
+            0)
         : 0;
+
+    final bool isLongText = widget.post.description.length > 160;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -68,14 +131,14 @@ class PostCard extends StatelessWidget {
         color: isDark ? AppColors.darkCard : Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: post.currentlyBoosted
+          color: widget.post.currentlyBoosted
               ? AppColors.boostOrange.withOpacity(0.5)
               : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
-          width: post.currentlyBoosted ? 1.5 : 1,
+          width: widget.post.currentlyBoosted ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: post.currentlyBoosted
+            color: widget.post.currentlyBoosted
                 ? AppColors.boostOrange.withOpacity(0.15)
                 : Colors.black.withOpacity(0.04),
             blurRadius: 10,
@@ -84,12 +147,12 @@ class PostCard extends StatelessWidget {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Boosted indicator header
-            if (post.currentlyBoosted) ...[
+            if (widget.post.currentlyBoosted) ...[
               Row(
                 children: const [
                   Icon(Icons.bolt, color: AppColors.boostOrange, size: 16),
@@ -105,7 +168,7 @@ class PostCard extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
             ],
 
             // User Profile Row
@@ -113,7 +176,7 @@ class PostCard extends StatelessWidget {
               children: [
                 // Avatar with online status indicator dot
                 GestureDetector(
-                  onTap: onTapUser,
+                  onTap: widget.onTapUser,
                   child: Stack(
                     children: [
                       if (isMascotAvatar)
@@ -125,13 +188,27 @@ class PostCard extends StatelessWidget {
                         CircleAvatar(
                           radius: 24,
                           backgroundColor: AppColors.primary.withOpacity(0.1),
-                          backgroundImage: post.userProfilePic.isNotEmpty
-                              ? CachedNetworkImageProvider(post.userProfilePic)
+                          backgroundImage: (widget
+                                      .post.userProfilePic.isNotEmpty &&
+                                  (widget.post.userProfilePic
+                                          .startsWith('http') ||
+                                      widget.post.userProfilePic
+                                          .startsWith('https')))
+                              ? CachedNetworkImageProvider(
+                                  widget.post.userProfilePic)
                               : null,
-                          child: post.userProfilePic.isEmpty
+                          child: (widget.post.userProfilePic.isEmpty ||
+                                  (!widget.post.userProfilePic
+                                          .startsWith('http') &&
+                                      !widget.post.userProfilePic
+                                          .startsWith('https')))
                               ? Text(
-                                  post.username.isNotEmpty ? post.username[0].toUpperCase() : 'U',
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary),
+                                  widget.post.username.isNotEmpty
+                                      ? widget.post.username[0].toUpperCase()
+                                      : 'C',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary),
                                 )
                               : null,
                         ),
@@ -139,8 +216,8 @@ class PostCard extends StatelessWidget {
                         right: 0,
                         bottom: 0,
                         child: StatusBadge(
-                          isOnline: post.userIsOnline,
-                          lastSeen: post.userLastSeen,
+                          isOnline: widget.post.userIsOnline,
+                          lastSeen: widget.post.userLastSeen,
                           showText: false,
                           dotSize: 11,
                         ),
@@ -153,44 +230,61 @@ class PostCard extends StatelessWidget {
                 // Username, Verification Badge, Location & Post Timestamp
                 Expanded(
                   child: GestureDetector(
-                    onTap: onTapUser,
+                    onTap: widget.onTapUser,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Text(
-                              '@${post.username}',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                            Flexible(
+                              child: Text(
+                                '@${widget.post.username}',
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: isDark
+                                      ? AppColors.darkTextPrimary
+                                      : AppColors.lightTextPrimary,
+                                ),
                               ),
                             ),
-                            if (post.userIsVerified) ...[
+                            if (widget.post.userIsVerified) ...[
                               const SizedBox(width: 4),
-                              const Icon(Icons.verified, color: AppColors.verifiedBlue, size: 16),
+                              const Icon(Icons.verified,
+                                  color: AppColors.verifiedBlue, size: 16),
                             ],
                           ],
                         ),
                         const SizedBox(height: 2),
                         Row(
                           children: [
-                            Icon(Icons.location_on, size: 13, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                            Icon(Icons.location_on,
+                                size: 13,
+                                color: isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary),
                             const SizedBox(width: 2),
-                            Text(
-                              post.location,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                            Flexible(
+                              child: Text(
+                                widget.post.location,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark
+                                      ? AppColors.darkTextSecondary
+                                      : AppColors.lightTextSecondary,
+                                ),
                               ),
                             ),
                             Text(
-                              ' · ${_formatPostTime(post.createdAt)}',
+                              ' · ${_formatPostTime(widget.post.createdAt)}',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                color: isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary,
                               ),
                             ),
                           ],
@@ -200,45 +294,124 @@ class PostCard extends StatelessWidget {
                   ),
                 ),
 
-                // Follow / Boost Button
-                if (!isSelf && currentUser != null && !isFollowing)
-                  OutlinedButton(
-                    onPressed: () {
-                      dbService.toggleFollow(currentUser.id, post.userId);
+                // Follow / Owner Options Button
+                if (!isSelf && currentUser != null) ...[
+                  if (!isFollowing)
+                    OutlinedButton(
+                      onPressed: () {
+                        userProvider.toggleFollow(
+                          currentUser.id,
+                          widget.post.userId,
+                          targetUsername: widget.post.username,
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        minimumSize: const Size(60, 30),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                        side: const BorderSide(
+                          color: AppColors.primary,
+                          width: 1.2,
+                        ),
+                      ),
+                      child: const Text(
+                        '+ Follow',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    onSelected: (val) {
+                      if (val == 'report') {
+                        ReportModal.show(
+                          context: context,
+                          targetType: ReportTargetType.post,
+                          targetId: widget.post.id,
+                          reportedUserId: widget.post.userId,
+                          targetPreview: widget.post.description.isNotEmpty
+                              ? widget.post.description
+                              : 'Post by @${widget.post.username}',
+                        );
+                      }
                     },
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      minimumSize: const Size(60, 30),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      side: const BorderSide(
-                        color: AppColors.primary,
-                        width: 1.2,
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'report',
+                        child: Row(
+                          children: [
+                            Icon(Icons.flag_outlined,
+                                size: 18, color: Colors.orange),
+                            SizedBox(width: 8),
+                            Text('Report Post'),
+                          ],
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      '+ Follow',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary,
-                      ),
-                    ),
-                  )
-                else if (isSelf && currentUser != null)
+                    ],
+                  ),
+                ] else if (isSelf && currentUser != null) ...[
                   ElevatedButton.icon(
-                    onPressed: () => BoostPostModal.show(context, post, currentUser),
+                    onPressed: () =>
+                        BoostPostModal.show(context, widget.post, currentUser),
                     icon: const Icon(Icons.bolt, size: 14, color: Colors.white),
-                    label: const Text('Boost', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                    label: const Text('Boost',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white)),
                     style: ElevatedButton.styleFrom(
-                      primary: AppColors.boostOrange,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      minimumSize: const Size(60, 30),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      backgroundColor: AppColors.boostOrange,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      minimumSize: const Size(55, 28),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, size: 20),
+                    onSelected: (val) {
+                      if (val == 'edit') {
+                        _openEditPost(context);
+                      } else if (val == 'delete') {
+                        _confirmDeletePost(context, currentUser.id);
+                      }
+                    },
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit,
+                                size: 18, color: AppColors.primary),
+                            SizedBox(width: 8),
+                            Text('Edit Post'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete, size: 18, color: Colors.red),
+                            SizedBox(width: 8),
+                            Text('Delete Post',
+                                style: TextStyle(color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 14),
+
+            const SizedBox(height: 8),
 
             // Metadata Chips (Community Tag + Dating Pills if dating community)
             Wrap(
@@ -247,13 +420,14 @@ class PostCard extends StatelessWidget {
               children: [
                 // Community Tag Pill
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.secondary.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    post.community,
+                    widget.post.community,
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -265,7 +439,8 @@ class PostCard extends StatelessWidget {
                 if (isDatingCommunity) ...[
                   // Looking For Pill
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: AppColors.primary.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
@@ -277,11 +452,13 @@ class PostCard extends StatelessWidget {
                             text: 'Looking for: ',
                             style: TextStyle(
                               fontSize: 12,
-                              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                              color: isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary,
                             ),
                           ),
                           TextSpan(
-                            text: post.lookingFor,
+                            text: widget.post.lookingFor,
                             style: const TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
@@ -295,26 +472,33 @@ class PostCard extends StatelessWidget {
 
                   // Preferred Age Range Pill
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.withOpacity(0.1),
+                      color: isDark
+                          ? Colors.white.withOpacity(0.06)
+                          : Colors.grey.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      'Age: ${post.ageRangeMin} - ${post.ageRangeMax}',
+                      'Age: ${widget.post.ageRangeMin} - ${widget.post.ageRangeMax}',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                        color: isDark
+                            ? AppColors.darkTextPrimary
+                            : AppColors.lightTextPrimary,
                       ),
                     ),
                   ),
 
                   // Availability Badge
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _getAvailabilityColor(post.availability).withOpacity(0.15),
+                      color: _getAvailabilityColor(widget.post.availability)
+                          .withOpacity(0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -323,15 +507,17 @@ class PostCard extends StatelessWidget {
                         Icon(
                           Icons.access_time,
                           size: 13,
-                          color: _getAvailabilityColor(post.availability),
+                          color:
+                              _getAvailabilityColor(widget.post.availability),
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          post.availability,
+                          widget.post.availability,
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: _getAvailabilityColor(post.availability),
+                            color:
+                                _getAvailabilityColor(widget.post.availability),
                           ),
                         ),
                       ],
@@ -340,46 +526,76 @@ class PostCard extends StatelessWidget {
                 ],
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
 
-            // Post Description / Content
-            Text(
-              post.description,
-              style: TextStyle(
-                fontSize: 14.5,
-                height: 1.4,
-                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-              ),
-            ),
-
-            // Attached Picture
-            if (post.postImageUrl != null && post.postImageUrl!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              GestureDetector(
-                onTap: () => _showFullScreenImage(context, post.postImageUrl!),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: CachedNetworkImage(
-                    imageUrl: post.postImageUrl!,
-                    width: double.infinity,
-                    height: 230,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => Container(
-                      height: 230,
-                      color: isDark ? AppColors.darkSurface : Colors.grey.shade200,
-                      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                    ),
-                    errorWidget: (context, url, error) => const SizedBox(),
+            // Post Description / Content with Read More Expansion
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  (!isLongText || _isExpanded)
+                      ? widget.post.description
+                      : '${widget.post.description.substring(0, 150)}...',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    height: 1.4,
+                    color: isDark
+                        ? AppColors.darkTextPrimary
+                        : AppColors.lightTextPrimary,
                   ),
                 ),
-              ),
-            ],
-            const SizedBox(height: 16),
+                if (isLongText) ...[
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () => setState(() => _isExpanded = !_isExpanded),
+                    child: Text(
+                      _isExpanded ? 'Show less' : 'Read more',
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
 
-            const Divider(height: 1),
+            // Attached Media (Photo or Video)
+            if (widget.post.hasMedia) ...[
+              const SizedBox(height: 8),
+              if (widget.post.isVideo)
+                PostVideoPlayer(
+                  videoUrl: widget.post.mediaUrl!,
+                  thumbnailUrl: widget.post.thumbnailUrl,
+                )
+              else if (widget.post.isImage)
+                GestureDetector(
+                  onTap: () =>
+                      _showFullScreenImage(context, widget.post.mediaUrl!),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: CachedNetworkImage(
+                      imageUrl: widget.post.mediaUrl!,
+                      width: double.infinity,
+                      height: 220,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Container(
+                        height: 220,
+                        color: isDark
+                            ? AppColors.darkSurface
+                            : Colors.grey.shade200,
+                        child: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                      ),
+                      errorWidget: (context, url, error) => const SizedBox(),
+                    ),
+                  ),
+                ),
+            ],
             const SizedBox(height: 10),
 
-            // Action Buttons Row: Crush, Crushes, Connect
+            // Action Buttons Row: Crush, Crushes, Connect (Hidden if self)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -387,26 +603,36 @@ class PostCard extends StatelessWidget {
                 InkWell(
                   onTap: () {
                     if (currentUser != null) {
-                      postProvider.toggleCrush(post.id, currentUser.id);
+                      postProvider.toggleCrush(widget.post.id, currentUser.id);
                     }
                   },
                   borderRadius: BorderRadius.circular(20),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                     child: Row(
                       children: [
                         Icon(
                           isCrushed ? Icons.favorite : Icons.favorite_border,
-                          color: isCrushed ? AppColors.primary : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
-                          size: 20,
+                          color: isCrushed
+                              ? AppColors.primary
+                              : (isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary),
+                          size: 19,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         Text(
-                          '${post.crushCount}',
+                          '${widget.post.crushCount}',
                           style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: isCrushed ? FontWeight.bold : FontWeight.w500,
-                            color: isCrushed ? AppColors.primary : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                            fontSize: 12.5,
+                            fontWeight:
+                                isCrushed ? FontWeight.bold : FontWeight.w500,
+                            color: isCrushed
+                                ? AppColors.primary
+                                : (isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary),
                           ),
                         ),
                       ],
@@ -416,23 +642,28 @@ class PostCard extends StatelessWidget {
 
                 // Crushes Button (Comments)
                 InkWell(
-                  onTap: () => _showCrushesSheet(context, post),
+                  onTap: () => _showCrushesSheet(context, widget.post),
                   borderRadius: BorderRadius.circular(20),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                     child: Row(
                       children: [
                         Icon(
                           Icons.chat_bubble_outline,
-                          color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                          size: 20,
+                          color: isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary,
+                          size: 19,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         Text(
-                          '${post.crushesCount} Crushes',
+                          '${widget.post.crushesCount}',
                           style: TextStyle(
-                            fontSize: 13,
-                            color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                            fontSize: 12.5,
+                            color: isDark
+                                ? AppColors.darkTextSecondary
+                                : AppColors.lightTextSecondary,
                           ),
                         ),
                       ],
@@ -440,54 +671,60 @@ class PostCard extends StatelessWidget {
                   ),
                 ),
 
-                // Connect CTA Button
-                ElevatedButton(
-                  onPressed: () {
-                    if (currentUser == null) return;
+                // Connect CTA Button (Only shown if NOT self)
+                if (!isSelf)
+                  ElevatedButton(
+                    onPressed: () {
+                      if (currentUser == null) return;
 
-                    final targetUser = dbService.getUser(post.userId) ?? UserModel(
-                      id: post.userId,
-                      username: post.username,
-                      email: '',
-                      country: post.userCountry,
-                      city: post.userCity,
-                      dateOfBirth: DateTime(1998, 1, 1),
-                      gender: 'Female',
-                      bio: '',
-                      profilePicUrl: post.userProfilePic,
-                      preferredContactMethod: 'WhatsApp',
-                      contactDetails: '+254712345678',
-                      isVerified: post.userIsVerified,
-                    );
+                      final targetUser =
+                          dbService.getUser(widget.post.userId) ??
+                              UserModel(
+                                id: widget.post.userId,
+                                username: widget.post.username,
+                                email: '',
+                                country: widget.post.userCountry,
+                                city: widget.post.userCity,
+                                dateOfBirth: DateTime(1998, 1, 1),
+                                gender: 'Female',
+                                bio: '',
+                                profilePicUrl: widget.post.userProfilePic,
+                                preferredContactMethod: 'WhatsApp',
+                                contactDetails: '+254712345678',
+                                isVerified: widget.post.userIsVerified,
+                              );
 
-                    connProvider.initiateConnect(
-                      context: context,
-                      sender: currentUser,
-                      recipient: targetUser,
-                      postId: post.id,
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    primary: AppColors.primary,
-                    elevation: 2,
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.favorite, color: Colors.white, size: 16),
-                      SizedBox(width: 6),
-                      Text(
-                        'Connect',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                      connProvider.initiateConnect(
+                        context: context,
+                        sender: currentUser,
+                        recipient: targetUser,
+                        postId: widget.post.id,
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20)),
+                      backgroundColor: AppColors.primary,
+                      elevation: 1,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.favorite, color: Colors.white, size: 15),
+                        SizedBox(width: 4),
+                        Text(
+                          'Connect',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ],
@@ -523,99 +760,279 @@ class PostCard extends StatelessWidget {
       builder: (ctx) {
         return Consumer2<PostProvider, AuthProvider>(
           builder: (context, postProv, authProv, child) {
-            final comments = postProv.getPostComments(post.id);
             final currentUser = authProv.currentUser;
 
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(ctx).viewInsets.bottom,
-                left: 16,
-                right: 16,
-                top: 16,
-              ),
-              child: SizedBox(
-                height: MediaQuery.of(ctx).size.height * 0.6,
-                child: Column(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Crushes (${comments.length})',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: comments.isEmpty
-                          ? Center(
-                              child: Text(
-                                'No Crushes yet. Be the first to reply.',
-                                style: TextStyle(color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: comments.length,
-                              itemBuilder: (ctx, i) {
-                                final c = comments[i];
-                                return ListTile(
-                                  leading: CircleAvatar(
-                                    backgroundImage: CachedNetworkImageProvider(c.userProfilePic),
+            return StreamBuilder<List<CrushCommentModel>>(
+              stream: postProv.getCommentsStream(post.id),
+              initialData: postProv.getPostComments(post.id),
+              builder: (context, snapshot) {
+                final comments =
+                    snapshot.data ?? postProv.getPostComments(post.id);
+
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                    left: 16,
+                    right: 16,
+                    top: 16,
+                  ),
+                  child: SizedBox(
+                    height: MediaQuery.of(ctx).size.height * 0.6,
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Crushes (${comments.length})',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: isDark
+                                ? AppColors.darkTextPrimary
+                                : AppColors.lightTextPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: comments.isEmpty
+                              ? Center(
+                                  child: Text(
+                                    'No Crushes yet. Be the first to reply.',
+                                    style: TextStyle(
+                                        color: isDark
+                                            ? AppColors.darkTextSecondary
+                                            : AppColors.lightTextSecondary),
                                   ),
-                                  title: Text('@${c.username}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  subtitle: Text(c.text),
-                                );
-                              },
-                            ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: commentController,
-                              decoration: const InputDecoration(
-                                hintText: 'Write a Crush reply...',
+                                )
+                              : ListView.builder(
+                                  itemCount: comments.length,
+                                  itemBuilder: (ctx, i) {
+                                    final c = comments[i];
+                                    final isCommentOwner =
+                                        currentUser != null &&
+                                            c.userId == currentUser.id;
+                                    final isMascot = c.userProfilePic
+                                        .startsWith('crushie_avatar_');
+                                    final mascotIdx = isMascot
+                                        ? (int.tryParse(c.userProfilePic
+                                                .replaceAll(
+                                                    'crushie_avatar_', '')) ??
+                                            0)
+                                        : 0;
+
+                                    return ListTile(
+                                      leading: isMascot
+                                          ? CrushieAvatar(
+                                              index: mascotIdx, radius: 18)
+                                          : CircleAvatar(
+                                              radius: 18,
+                                              backgroundImage:
+                                                  CachedNetworkImageProvider(
+                                                      c.userProfilePic),
+                                            ),
+                                      title: Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              '@${c.username}',
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '· ${_formatRelativeTime(c.createdAt)}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: isDark
+                                                  ? AppColors.darkTextSecondary
+                                                  : AppColors
+                                                      .lightTextSecondary,
+                                              fontWeight: FontWeight.normal,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      subtitle: Text(c.text),
+                                      trailing: isCommentOwner
+                                          ? PopupMenuButton<String>(
+                                              icon: const Icon(Icons.more_vert,
+                                                  size: 18),
+                                              onSelected: (val) {
+                                                if (val == 'edit') {
+                                                  _showEditCommentDialog(
+                                                      context, postProv, c);
+                                                } else if (val == 'delete') {
+                                                  _confirmDeleteComment(
+                                                      context,
+                                                      postProv,
+                                                      c,
+                                                      currentUser.id);
+                                                }
+                                              },
+                                              itemBuilder: (ctx) => [
+                                                const PopupMenuItem(
+                                                  value: 'edit',
+                                                  child: Text('Edit Comment'),
+                                                ),
+                                                const PopupMenuItem(
+                                                  value: 'delete',
+                                                  child: Text('Delete Comment',
+                                                      style: TextStyle(
+                                                          color: Colors.red)),
+                                                ),
+                                              ],
+                                            )
+                                          : PopupMenuButton<String>(
+                                              icon: const Icon(Icons.more_vert,
+                                                  size: 18),
+                                              onSelected: (val) {
+                                                if (val == 'report') {
+                                                  ReportModal.show(
+                                                    context: context,
+                                                    targetType: ReportTargetType
+                                                        .comment,
+                                                    targetId: c.id,
+                                                    reportedUserId: c.userId,
+                                                    targetPreview: c.text,
+                                                  );
+                                                }
+                                              },
+                                              itemBuilder: (ctx) => [
+                                                const PopupMenuItem(
+                                                  value: 'report',
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(Icons.flag_outlined,
+                                                          size: 16,
+                                                          color: Colors.orange),
+                                                      SizedBox(width: 8),
+                                                      Text('Report Comment'),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                    );
+                                  },
+                                ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: commentController,
+                                  decoration: const InputDecoration(
+                                    hintText: 'Write a Crush reply...',
+                                  ),
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.send,
+                                    color: AppColors.primary),
+                                onPressed: () {
+                                  if (commentController.text
+                                          .trim()
+                                          .isNotEmpty &&
+                                      currentUser != null) {
+                                    postProv.addCrushComment(
+                                      postId: post.id,
+                                      userId: currentUser.id,
+                                      username: currentUser.username,
+                                      userProfilePic: currentUser.profilePicUrl,
+                                      userIsVerified: currentUser.isVerified,
+                                      text: commentController.text.trim(),
+                                    );
+                                    commentController.clear();
+                                  }
+                                },
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            icon: const Icon(Icons.send, color: AppColors.primary),
-                            onPressed: () {
-                              if (commentController.text.trim().isNotEmpty && currentUser != null) {
-                                postProv.addCrushComment(
-                                  postId: post.id,
-                                  userId: currentUser.id,
-                                  username: currentUser.username,
-                                  userProfilePic: currentUser.profilePicUrl,
-                                  userIsVerified: currentUser.isVerified,
-                                  text: commentController.text.trim(),
-                                );
-                                commentController.clear();
-                              }
-                            },
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
         );
       },
+    );
+  }
+
+  void _showEditCommentDialog(
+      BuildContext context, PostProvider postProv, dynamic comment) {
+    final TextEditingController controller =
+        TextEditingController(text: comment.text);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Comment'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(hintText: 'Update comment...'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                postProv.editCrushComment(
+                  commentId: comment.id,
+                  postId: comment.postId,
+                  userId: comment.userId,
+                  newText: controller.text.trim(),
+                );
+                Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteComment(BuildContext context, PostProvider postProv,
+      dynamic comment, String userId) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Comment?'),
+        content: const Text('Are you sure you want to delete this comment?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              postProv.deleteCrushComment(
+                commentId: comment.id,
+                postId: comment.postId,
+                userId: userId,
+              );
+              Navigator.pop(ctx);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -641,7 +1058,8 @@ class PostCard extends StatelessWidget {
                     child: CircularProgressIndicator(color: Colors.white),
                   ),
                   errorWidget: (_, __, ___) => const Center(
-                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                    child:
+                        Icon(Icons.broken_image, color: Colors.white, size: 64),
                   ),
                 ),
               ),
@@ -658,5 +1076,17 @@ class PostCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatRelativeTime(DateTime dateTime) {
+    final diff = DateTime.now().difference(dateTime);
+    if (diff.inSeconds < 60) return 'now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    if (diff.inDays < 7) return '${diff.inDays}d';
+    final weeks = (diff.inDays / 7).floor();
+    if (weeks < 52) return '${weeks}w';
+    final years = (diff.inDays / 365).floor();
+    return '${years}y';
   }
 }

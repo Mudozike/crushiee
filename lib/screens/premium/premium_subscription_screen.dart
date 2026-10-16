@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../config/app_colors.dart';
 import '../../models/transaction_model.dart';
+import '../../models/notification_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/database_service.dart';
+import '../../services/firestore_service.dart';
 import '../../services/paystack_service.dart';
 
 class PremiumSubscriptionScreen extends StatefulWidget {
@@ -156,31 +158,57 @@ class _PremiumSubscriptionScreenState extends State<PremiumSubscriptionScreen> {
                     );
 
                     if (res != null && res.success) {
-                      dbService.recordTransaction(
-                        TransactionModel(
-                          id: res.transactionId,
-                          userId: user.id,
-                          type: type,
-                          amount: amount,
-                          paymentReference: res.transactionId,
-                          status: 'success',
-                        ),
+                      final tx = TransactionModel(
+                        id: res.transactionId,
+                        userId: user.id,
+                        type: type,
+                        amount: amount,
+                        paymentMethod: res.paymentMethod,
+                        paymentReference: res.transactionId,
+                        status: 'completed',
+                        metadata: {'plan': _selectedPlan},
                       );
+                      await FirestoreService().saveTransaction(tx);
 
                       if (type == 'bundle') {
-                        dbService.upgradeUserToBundle(user.id, days: days);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('🎉 Premium + Verified Bundle Activated!')),
+                        final updated = user.copyWith(
+                          isPremium: true,
+                          premiumExpiry: DateTime.now().add(Duration(days: days)),
+                          isVerified: true,
+                          verifiedExpiry: DateTime.now().add(Duration(days: days)),
                         );
+                        await authProv.updateUserProfile(updated);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('🎉 Premium + Verified Bundle Activated!')),
+                          );
+                        }
                       } else {
-                        dbService.upgradeUserToPremium(user.id, days: days);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('🎉 Welcome to Crushie Premium! Unlimited Connections active.')),
-                        );
+                        await authProv.upgradeToPremium(days: days);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('🎉 Welcome to Crushie Premium! Unlimited Connections active.')),
+                          );
+                        }
                       }
 
-                      authProv.refreshUser();
-                      widget.onSubscriptionSuccess();
+                      final notif = NotificationModel(
+                        id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+                        userId: user.id,
+                        fromUserId: 'system',
+                        fromUsername: 'Crushie Support',
+                        fromUserProfilePic: '',
+                        type: NotificationType.system,
+                        title: 'Welcome to Premium!',
+                        body: 'Your $desc has been activated successfully.',
+                      );
+                      await FirestoreService().createNotification(notif);
+
+                      if (widget.onSubscriptionSuccess != null) {
+                        widget.onSubscriptionSuccess!();
+                      } else {
+                        if (context.mounted) Navigator.pop(context);
+                      }
                     }
                   },
                   style: ElevatedButton.styleFrom(

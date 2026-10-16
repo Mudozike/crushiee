@@ -48,4 +48,26 @@ class CrushCommentModel {
           : DateTime.now(),
     );
   }
+
+  CrushCommentModel copyWith({
+    String? id,
+    String? postId,
+    String? userId,
+    String? username,
+    String? userProfilePic,
+    bool? userIsVerified,
+    String? text,
+    DateTime? createdAt,
+  }) {
+    return CrushCommentModel(
+      id: id ?? this.id,
+      postId: postId ?? this.postId,
+      userId: userId ?? this.userId,
+      username: username ?? this.username,
+      userProfilePic: userProfilePic ?? this.userProfilePic,
+      userIsVerified: userIsVerified ?? this.userIsVerified,
+      text: text ?? this.text,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 }

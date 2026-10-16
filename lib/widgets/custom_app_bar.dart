@@ -64,20 +64,31 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
           
           // Active Filter Badge if selected
           if (isFiltered) ...[
-            const SizedBox(width: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppColors.primary, width: 1.2),
-              ),
-              child: Text(
-                activeFilterName,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
+            const SizedBox(width: 8),
+            Flexible(
+              child: GestureDetector(
+                onTap: () {
+                  if (onTapFilter != null) {
+                    onTapFilter!();
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.primary, width: 1.2),
+                  ),
+                  child: Text(
+                    activeFilterName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -86,34 +97,43 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       actions: [
         // 4. Subtle FILTER Icon/Button beside controls
-        if (onTapFilter != null)
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              IconButton(
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            Builder(
+              builder: (btnContext) => IconButton(
                 icon: Icon(
                   Icons.tune_rounded,
                   color: isFiltered ? AppColors.primary : (isDark ? Colors.white70 : Colors.black87),
                   size: 22,
                 ),
-                onPressed: onTapFilter,
+                onPressed: () {
+                  if (onTapFilter != null) {
+                    onTapFilter!();
+                  } else {
+                    try {
+                      Scaffold.of(btnContext).openEndDrawer();
+                    } catch (_) {}
+                  }
+                },
                 tooltip: 'Filter Categories',
               ),
-              if (isFiltered)
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: Container(
-                    width: 7,
-                    height: 7,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                    ),
+            ),
+            if (isFiltered)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  width: 7,
+                  height: 7,
+                  decoration: const BoxDecoration(
+                    color: AppColors.primary,
+                    shape: BoxShape.circle,
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
+        ),
 
         // Notifications Icon
         Stack(

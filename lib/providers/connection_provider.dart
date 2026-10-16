@@ -1,55 +1,146 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/connection_model.dart';
 import '../models/user_model.dart';
+import '../models/notification_model.dart';
 import '../models/transaction_model.dart';
 import '../services/database_service.dart';
+import '../services/firestore_service.dart';
 import '../services/paystack_service.dart';
 import '../screens/premium/premium_subscription_screen.dart';
 import '../screens/messages/chat_screen.dart';
 import '../config/app_colors.dart';
 
 class ConnectionProvider extends ChangeNotifier {
-  final DatabaseService _db = DatabaseService();
+  final DatabaseService _db;
+  final FirestoreService _firestoreService;
 
-  ConnectionProvider() {
-    _db.addListener(_onDbChanged);
+  ConnectionProvider({
+    DatabaseService? db,
+    FirestoreService? firestoreService,
+  })  : _db = db ?? DatabaseService(),
+        _firestoreService = firestoreService ?? FirestoreService();
+
+  List<ConnectionModel> _firestoreConnections = [];
+  List<ConnectionModel> get connections {
+    if (_currentUserId == null) return [];
+    return _firestoreConnections.isNotEmpty
+        ? _firestoreConnections
+        : _db.connections;
   }
 
-  void _onDbChanged() {
-    notifyListeners();
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+
+  StreamSubscription<List<ConnectionModel>>? _subscription;
+  String? _currentUserId;
+
+  void initUserConnections(String userId) {
+    if (userId.trim().isEmpty) return;
+    if (_currentUserId == userId && _subscription != null) return;
+    _currentUserId = userId;
+    _subscription?.cancel();
+    _isLoading = true;
+
+    try {
+      _subscription =
+          _firestoreService.getUserConnectionsStream(userId).listen((data) {
+        // De-duplicate connections by other participant ID to guarantee unique inbox rows
+        final Map<String, ConnectionModel> uniqueByOtherUser = {};
+        for (final conn in data) {
+          final otherId =
+              conn.senderId == userId ? conn.receiverId : conn.senderId;
+          if (!uniqueByOtherUser.containsKey(otherId)) {
+            uniqueByOtherUser[otherId] = conn;
+          } else {
+            final existing = uniqueByOtherUser[otherId]!;
+            final timeExisting =
+                existing.lastMessageTimestamp ?? existing.updatedAt;
+            final timeConn = conn.lastMessageTimestamp ?? conn.updatedAt;
+            if (timeConn.isAfter(timeExisting)) {
+              uniqueByOtherUser[otherId] = conn;
+            }
+          }
+        }
+        _firestoreConnections = uniqueByOtherUser.values.toList();
+        _isLoading = false;
+        notifyListeners();
+      }, onError: (e) {
+        debugPrint('[CONN_PROVIDER] Error in user connections stream: $e');
+        _isLoading = false;
+        notifyListeners();
+      });
+    } catch (e) {
+      debugPrint('[CONN_PROVIDER] Error starting connections stream: $e');
+      _isLoading = false;
+    }
   }
 
   @override
   void dispose() {
-    _db.removeListener(_onDbChanged);
+    _subscription?.cancel();
     super.dispose();
   }
 
-  List<ConnectionModel> get connections => _db.connections;
+  /// Cancels active connection subscription and clears cached connections on logout.
+  void clear() {
+    _subscription?.cancel();
+    _subscription = null;
+    _currentUserId = null;
+    _firestoreConnections = [];
+    _isLoading = false;
+    notifyListeners();
+  }
 
   List<ConnectionModel> getAcceptedConnections(String userId) {
-    final list = _db.connections.where(
-      (c) => (c.senderId == userId || c.recipientId == userId) && c.status == ConnectionStatus.accepted,
-    ).toList();
-    if (list.isNotEmpty) return list;
-
-    // Fallback: Return active connections dataset
-    return _db.connections.where((c) => c.status == ConnectionStatus.accepted).toList();
+    initUserConnections(userId);
+    if (_firestoreConnections.isNotEmpty) {
+      return _firestoreConnections;
+    }
+    return _db.connections;
   }
 
   List<ConnectionModel> getPendingRequestsForUser(String userId) {
-    return _db.connections.where(
-      (c) => c.recipientId == userId && c.status == ConnectionStatus.pending,
-    ).toList();
+    initUserConnections(userId);
+    return [];
+  }
+
+  Future<ConnectionModel> _persistOrRecoverConnection({
+    required ConnectionModel newConn,
+    required String senderId,
+    required String recipientId,
+  }) async {
+    try {
+      await _firestoreService.saveConnection(newConn);
+      return newConn;
+    } catch (e) {
+      // Handle the expected Firestore permission-denied or already-existing-conversation scenario safely.
+      // Re-query the canonical conversation after the initial write fails.
+      try {
+        final existing = await _firestoreService.findExistingConnection(
+            senderId, recipientId);
+        if (existing != null &&
+            existing.id.isNotEmpty &&
+            existing.participants.contains(senderId) &&
+            existing.participants.contains(recipientId)) {
+          debugPrint(
+              '[CONNECTION_PROVIDER] Concurrent connection detected. Reusing existing canonical connection: ${existing.id}');
+          return existing;
+        }
+      } catch (_) {
+        // Fall through to rethrow the original error 'e'
+      }
+      // Rethrow unrelated errors instead of hiding them
+      rethrow;
+    }
   }
 
   // CONNECT BUTTON Flow:
-  // Step 1: Premium User -> Send Request -> Open Messages (FREE, UNLIMITED)
-  // Step 2: Free User (Under 2/day AND under 20/month) -> Send Request -> Open Messages (FREE)
-  // Step 3: Free User (Hit 2/day or 20/month Limit) -> Show Payment Popup:
-  //         [Pay KES 50] -> Process payment -> Send Request -> Open Messages
+  // Step 1: Premium User -> Create Connection -> Open Messages (FREE, UNLIMITED)
+  // Step 2: Free User (Under 10/day AND under 60/month) -> Create Connection -> Open Messages (FREE)
+  // Step 3: Free User (Hit 10/day or 60/month Limit) -> Show Payment Popup:
+  //         [Pay KES 50] -> Create Connection -> Open Messages
   //         [Upgrade to Premium - KES 200/mo] -> Navigate to Premium Screen
-  //         [Cancel] -> Close Popup
   Future<ConnectionModel?> initiateConnect({
     required BuildContext context,
     required UserModel sender,
@@ -59,79 +150,175 @@ class ConnectionProvider extends ChangeNotifier {
   }) async {
     if (sender.id == recipient.id) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You cannot connect with your own profile!")),
+        const SnackBar(
+            content: Text("You cannot connect with your own profile!")),
       );
       return null;
     }
 
-    final existing = _db.connections.firstWhere(
-      (c) => (c.senderId == sender.id && c.recipientId == recipient.id) ||
-             (c.senderId == recipient.id && c.recipientId == sender.id),
+    initUserConnections(sender.id);
+
+    // 1. Check existing in-memory connections
+    ConnectionModel? existing = connections.firstWhere(
+      (c) =>
+          (c.senderId == sender.id && c.receiverId == recipient.id) ||
+          (c.senderId == recipient.id && c.receiverId == sender.id) ||
+          c.id == ConnectionModel.getConversationId(sender.id, recipient.id),
       orElse: () => ConnectionModel(
         id: '',
         senderId: '',
         senderUsername: '',
         senderProfilePic: '',
-        recipientId: '',
-        recipientUsername: '',
-        recipientProfilePic: '',
-        recipientContactMethod: '',
-        recipientContactDetails: '',
+        receiverId: '',
+        receiverUsername: '',
+        receiverProfilePic: '',
       ),
     );
 
-    if (existing.id.isNotEmpty) {
-      if (autoNavigateToChat) {
+    // 2. If not found in memory, check Firestore (canonical and legacy)
+    if (existing.id.isEmpty) {
+      existing = await _firestoreService.findExistingConnection(
+          sender.id, recipient.id);
+    }
+
+    if (existing != null && existing.id.isNotEmpty) {
+      if (autoNavigateToChat && context.mounted) {
         _navigateToChat(context, existing);
       }
       return existing;
     }
 
+    final canonicalId =
+        ConnectionModel.getConversationId(sender.id, recipient.id);
+
     // STEP 1: Check if Premium
-    if (sender.isPremium) {
-      final newConn = _db.sendConnectionRequest(
-        sender: sender,
-        recipient: recipient,
+    final isPremium = sender.isPremium &&
+        (sender.premiumExpiry == null ||
+            sender.premiumExpiry!.isAfter(DateTime.now()));
+    if (isPremium) {
+      final newConn = ConnectionModel(
+        id: canonicalId,
+        senderId: sender.id,
+        senderUsername: sender.username,
+        senderProfilePic: sender.profilePicUrl,
+        receiverId: recipient.id,
+        receiverUsername: recipient.username,
+        receiverProfilePic: recipient.profilePicUrl,
         postId: postId,
-        priceKES: 0.0,
-        isPremiumFree: true,
+        isPaid: false,
+        amount: 0,
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Connected with @${recipient.username}!")),
-      );
-
-      if (autoNavigateToChat && newConn != null) {
-        _navigateToChat(context, newConn);
+      ConnectionModel connToUse;
+      bool isExisting = false;
+      try {
+        connToUse = await _persistOrRecoverConnection(
+          newConn: newConn,
+          senderId: sender.id,
+          recipientId: recipient.id,
+        );
+        isExisting = (connToUse.id == newConn.id &&
+            connToUse.senderId != newConn.senderId);
+      } catch (e) {
+        debugPrint('[CONNECTION_PROVIDER] Error initiating connection: $e');
+        rethrow;
       }
-      return newConn;
+
+      if (!isExisting) {
+        _db.incrementUserConnectionUsage(sender.id);
+        final notif = NotificationModel(
+          id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+          userId: recipient.id,
+          fromUserId: sender.id,
+          fromUsername: sender.username,
+          fromUserProfilePic: sender.profilePicUrl,
+          type: NotificationType.connectionRequest,
+          title: 'New Connection!',
+          body: '${sender.username} connected with you',
+          connectionId: connToUse.id,
+        );
+        await _firestoreService.createNotification(notif).catchError((_) {});
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Connected with @${recipient.username}!")),
+        );
+
+        if (autoNavigateToChat) {
+          _navigateToChat(context, connToUse);
+        }
+      }
+      return connToUse;
     }
 
-    // STEP 2: Free User -> Check Daily & Monthly Connection Counts
+    // STEP 2: Free User -> Check Daily (10) & Monthly (60) Limits
     final dailyUsage = sender.activeDailyConnections;
     final monthlyUsage = sender.activeMonthlyConnections;
 
-    if (dailyUsage < 2 && monthlyUsage < 20) {
-      final newConn = _db.sendConnectionRequest(
-        sender: sender,
-        recipient: recipient,
+    if (dailyUsage < 10 && monthlyUsage < 60) {
+      final newConn = ConnectionModel(
+        id: canonicalId,
+        senderId: sender.id,
+        senderUsername: sender.username,
+        senderProfilePic: sender.profilePicUrl,
+        receiverId: recipient.id,
+        receiverUsername: recipient.username,
+        receiverProfilePic: recipient.profilePicUrl,
         postId: postId,
-        priceKES: 0.0,
-        isPremiumFree: true,
-      );
-      _db.incrementUserConnectionUsage(sender.id);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Connected with @${recipient.username}! (${dailyUsage + 1}/2 free today)")),
+        isPaid: false,
+        amount: 0,
       );
 
-      if (autoNavigateToChat && newConn != null) {
-        _navigateToChat(context, newConn);
+      ConnectionModel connToUse;
+      bool isExisting = false;
+      try {
+        connToUse = await _persistOrRecoverConnection(
+          newConn: newConn,
+          senderId: sender.id,
+          recipientId: recipient.id,
+        );
+        isExisting = (connToUse.id == newConn.id &&
+            connToUse.senderId != newConn.senderId);
+      } catch (e) {
+        debugPrint('[CONNECTION_PROVIDER] Error initiating connection: $e');
+        rethrow;
       }
-      return newConn;
+
+      if (!isExisting) {
+        _db.incrementUserConnectionUsage(sender.id);
+        final notif = NotificationModel(
+          id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+          userId: recipient.id,
+          fromUserId: sender.id,
+          fromUsername: sender.username,
+          fromUserProfilePic: sender.profilePicUrl,
+          type: NotificationType.connectionRequest,
+          title: 'New Connection!',
+          body: '${sender.username} connected with you',
+          connectionId: connToUse.id,
+        );
+        await _firestoreService.createNotification(notif).catchError((_) {});
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(
+                  "Connected with @${recipient.username}! (${dailyUsage + (isExisting ? 0 : 1)}/10 free today)")),
+        );
+
+        if (autoNavigateToChat) {
+          _navigateToChat(context, connToUse);
+        }
+      }
+      return connToUse;
     } else {
       // STEP 3: SHOW PAYMENT POPUP
-      _showLimitReachedPopup(context, sender, recipient, postId, autoNavigateToChat);
+      if (context.mounted) {
+        _showLimitReachedPopup(context, sender, recipient, postId,
+            autoNavigateToChat, canonicalId);
+      }
       return null;
     }
   }
@@ -142,11 +329,12 @@ class ConnectionProvider extends ChangeNotifier {
     UserModel recipient,
     String? postId,
     bool autoNavigateToChat,
+    String canonicalId,
   ) {
-    final isDailyLimit = sender.activeDailyConnections >= 2;
+    final isDailyLimit = sender.activeDailyConnections >= 10;
     final limitMsg = isDailyLimit
-        ? "You've used all 2 free connections today."
-        : "You've used all 20 free connections this month.";
+        ? "You've used all 10 free connections today."
+        : "You've used all 60 free connections this month.";
 
     showDialog(
       context: context,
@@ -156,7 +344,8 @@ class ConnectionProvider extends ChangeNotifier {
           children: const [
             Icon(Icons.lock_clock_outlined, color: AppColors.primary, size: 26),
             SizedBox(width: 8),
-            Text('Connection Limit Reached', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+            Text('Connection Limit Reached',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
           ],
         ),
         content: Column(
@@ -165,7 +354,8 @@ class ConnectionProvider extends ChangeNotifier {
           children: [
             Text(
               limitMsg,
-              style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+              style:
+                  const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 10),
             const Text(
@@ -185,45 +375,96 @@ class ConnectionProvider extends ChangeNotifier {
               final res = await PaystackService.showPaymentDialog(
                 context: context,
                 title: 'Pay KES 50 for Connection',
-                description: 'Unlock direct chat with @${recipient.username}',
+                description:
+                    'Unlock direct connection & chat with @${recipient.username}',
                 amountKES: 50.0,
                 userEmail: sender.email,
               );
 
               if (res != null && res.success) {
-                _db.recordTransaction(
-                  TransactionModel(
-                    id: res.transactionId,
-                    userId: sender.id,
-                    type: 'connection',
-                    amount: 50.0,
-                    paymentReference: res.transactionId,
-                    status: 'success',
-                  ),
+                final tx = TransactionModel(
+                  id: res.transactionId,
+                  userId: sender.id,
+                  type: 'connection',
+                  amount: 50.0,
+                  paymentMethod: res.paymentMethod,
+                  paymentReference: res.transactionId,
+                  status: 'completed',
+                  metadata: {
+                    'receiverId': recipient.id,
+                    'postId': postId,
+                  },
                 );
-                final newConn = _db.sendConnectionRequest(
-                  sender: sender,
-                  recipient: recipient,
+                await _firestoreService.saveTransaction(tx);
+
+                final newConn = ConnectionModel(
+                  id: canonicalId,
+                  senderId: sender.id,
+                  senderUsername: sender.username,
+                  senderProfilePic: sender.profilePicUrl,
+                  receiverId: recipient.id,
+                  receiverUsername: recipient.username,
+                  receiverProfilePic: recipient.profilePicUrl,
                   postId: postId,
-                  priceKES: 50.0,
-                  isPremiumFree: false,
-                );
-                _db.incrementUserConnectionUsage(sender.id);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("Connected with @${recipient.username}!")),
+                  isPaid: true,
+                  amount: 50,
                 );
 
-                if (autoNavigateToChat && newConn != null) {
-                  _navigateToChat(context, newConn);
+                ConnectionModel connToUse;
+                bool isExisting = false;
+                try {
+                  connToUse = await _persistOrRecoverConnection(
+                    newConn: newConn,
+                    senderId: sender.id,
+                    recipientId: recipient.id,
+                  );
+                  isExisting = (connToUse.id == newConn.id &&
+                      connToUse.senderId != newConn.senderId);
+                } catch (e) {
+                  debugPrint(
+                      '[CONNECTION_PROVIDER] Error saving paid connection: $e');
+                  rethrow;
+                }
+
+                if (!isExisting) {
+                  _db.incrementUserConnectionUsage(sender.id);
+                  final notif = NotificationModel(
+                    id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+                    userId: recipient.id,
+                    fromUserId: sender.id,
+                    fromUsername: sender.username,
+                    fromUserProfilePic: sender.profilePicUrl,
+                    type: NotificationType.connectionRequest,
+                    title: 'New Connection!',
+                    body: '${sender.username} connected with you',
+                    connectionId: connToUse.id,
+                  );
+                  await _firestoreService
+                      .createNotification(notif)
+                      .catchError((_) {});
+                }
+
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                        content:
+                            Text("Connected with @${recipient.username}!")),
+                  );
+
+                  if (autoNavigateToChat) {
+                    _navigateToChat(context, connToUse);
+                  }
                 }
               }
             },
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: AppColors.primary),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
-            child: const Text('Pay KES 50', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            child: const Text('Pay KES 50',
+                style: TextStyle(
+                    color: AppColors.primary, fontWeight: FontWeight.bold)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -238,12 +479,16 @@ class ConnectionProvider extends ChangeNotifier {
               );
             },
             style: ElevatedButton.styleFrom(
-              primary: AppColors.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              backgroundColor: AppColors.primary,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
             child: const Text(
               'Upgrade to Premium - KES 200/mo',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11.5),
             ),
           ),
         ],
@@ -260,7 +505,27 @@ class ConnectionProvider extends ChangeNotifier {
     );
   }
 
-  void respondToConnectionRequest(String connectionId, ConnectionStatus status) {
+  Future<void> respondToConnectionRequest(
+      String connectionId, ConnectionStatus status) async {
+    ConnectionStatus? prevStatus;
+    final existingIndex =
+        _db.connections.indexWhere((c) => c.id == connectionId);
+    if (existingIndex != -1) {
+      prevStatus = _db.connections[existingIndex].status;
+    }
+
     _db.respondToConnection(connectionId, status);
+    notifyListeners();
+    try {
+      await _firestoreService.updateConnectionStatus(connectionId, status);
+    } catch (e) {
+      debugPrint(
+          '[CONNECTION_PROVIDER] Error updating connection status in Firestore: $e');
+      if (prevStatus != null && prevStatus != status) {
+        _db.respondToConnection(connectionId, prevStatus);
+        notifyListeners();
+      }
+      rethrow;
+    }
   }
 }

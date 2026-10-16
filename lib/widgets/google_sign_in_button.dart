@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 class GoogleSignInButton extends StatelessWidget {
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final String text;
 
   const GoogleSignInButton({
@@ -124,7 +124,8 @@ class _GoogleLogoPainter extends CustomPainter {
 
     // Blue horizontal bar
     paint.color = const Color(0xFF4285F4);
-    final barRect = Rect.fromLTRB(cx, cy - radius * 0.22, cx + radius, cy + radius * 0.22);
+    final barRect =
+        Rect.fromLTRB(cx, cy - radius * 0.22, cx + radius, cy + radius * 0.22);
     canvas.drawRect(barRect, paint);
   }
 
