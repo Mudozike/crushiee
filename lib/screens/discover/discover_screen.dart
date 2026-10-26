@@ -455,6 +455,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                 final user = allUsers[i];
                                 final isFollowing = currentUser != null &&
                                     userProv.isFollowing(user.id);
+                                final isPending = currentUser != null &&
+                                    userProv.isFollowPending(user.id,
+                                        currentUserId: currentUser.id);
                                 final isMascot = user.profilePicUrl
                                     .startsWith('crushie_avatar_');
                                 final mascotIdx = isMascot
@@ -571,19 +574,39 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                         width: double.infinity,
                                         height: 28,
                                         child: OutlinedButton(
-                                          onPressed: () {
-                                            if (currentUser != null) {
-                                              userProv.toggleFollow(
-                                                currentUser.id,
-                                                user.id,
-                                                targetUsername: user.username,
-                                              );
-                                            }
-                                          },
+                                          onPressed: isPending
+                                              ? null
+                                              : () async {
+                                                  if (currentUser != null) {
+                                                    try {
+                                                      await userProv.toggleFollow(
+                                                        currentUser.id,
+                                                        user.id,
+                                                        targetUsername:
+                                                            user.username,
+                                                      );
+                                                    } catch (e) {
+                                                      if (ctx.mounted) {
+                                                        ScaffoldMessenger.of(ctx)
+                                                            .showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                                'Failed to update follow: $e'),
+                                                            backgroundColor:
+                                                                Colors.redAccent,
+                                                            duration:
+                                                                const Duration(
+                                                                    seconds: 2),
+                                                          ),
+                                                        );
+                                                      }
+                                                    }
+                                                  }
+                                                },
                                           style: OutlinedButton.styleFrom(
                                             padding: EdgeInsets.zero,
                                             side: BorderSide(
-                                                color: isFollowing
+                                                color: (isFollowing || isPending)
                                                     ? Colors.grey
                                                     : AppColors.primary,
                                                 width: 1.2),
@@ -591,18 +614,30 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                                 borderRadius:
                                                     BorderRadius.circular(14)),
                                           ),
-                                          child: Text(
-                                            isFollowing
-                                                ? 'Following'
-                                                : '+ Follow',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: isFollowing
-                                                  ? Colors.grey
-                                                  : AppColors.primary,
-                                            ),
-                                          ),
+                                          child: isPending
+                                              ? const SizedBox(
+                                                  width: 14,
+                                                  height: 14,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 1.5,
+                                                    valueColor:
+                                                        AlwaysStoppedAnimation<
+                                                                Color>(
+                                                            AppColors.primary),
+                                                  ),
+                                                )
+                                              : Text(
+                                                  isFollowing
+                                                      ? 'Following'
+                                                      : '+ Follow',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: isFollowing
+                                                        ? Colors.grey
+                                                        : AppColors.primary,
+                                                  ),
+                                                ),
                                         ),
                                       ),
                                     ],

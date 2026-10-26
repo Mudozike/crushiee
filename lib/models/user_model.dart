@@ -24,10 +24,13 @@ class UserModel {
   final int followingCount;
   final List<String> communities;
   final List<String> blockedUserIds;
+  final List<String> locationNotificationSubscriptions;
   final bool profileCompleted;
   final bool isOnline;
-  final DateTime lastSeen;
+  final DateTime? lastSeen;
   final DateTime createdAt;
+  final String? typingInConnectionId;
+  final DateTime? typingUpdatedAt;
 
   UserModel({
     required this.id,
@@ -55,11 +58,13 @@ class UserModel {
     this.followingCount = 0,
     this.communities = const [],
     this.blockedUserIds = const [],
-    this.isOnline = true,
-    DateTime? lastSeen,
+    this.locationNotificationSubscriptions = const [],
+    this.isOnline = false,
+    this.lastSeen,
     DateTime? createdAt,
-  })  : lastSeen = lastSeen ?? DateTime.now(),
-        createdAt = createdAt ?? DateTime.now();
+    this.typingInConnectionId,
+    this.typingUpdatedAt,
+  })  : createdAt = createdAt ?? DateTime.now();
 
   int get age {
     final now = DateTime.now();
@@ -124,11 +129,28 @@ class UserModel {
       'followingCount': followingCount,
       'communities': communities,
       'blockedUserIds': blockedUserIds,
+      'locationNotificationSubscriptions': locationNotificationSubscriptions,
       'profileCompleted': profileCompleted,
       'isOnline': isOnline,
-      'lastSeen': lastSeen.toIso8601String(),
+      'lastSeen': lastSeen?.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
+      'typingInConnectionId': typingInConnectionId,
+      'typingUpdatedAt': typingUpdatedAt?.toIso8601String(),
     };
+  }
+
+  static DateTime? _parseDateTime(dynamic val) {
+    if (val == null) return null;
+    if (val is DateTime) return val;
+    if (val is String) return DateTime.tryParse(val);
+    if (val is int) return DateTime.fromMillisecondsSinceEpoch(val);
+    try {
+      final dynamic dyn = val;
+      if (dyn.toDate != null) {
+        return dyn.toDate() as DateTime;
+      }
+    } catch (_) {}
+    return null;
   }
 
   factory UserModel.fromMap(Map<String, dynamic> map, String id) {
@@ -138,9 +160,7 @@ class UserModel {
       email: map['email'] ?? '',
       country: map['country'] ?? '',
       city: map['city'] ?? '',
-      dateOfBirth: map['dateOfBirth'] != null
-          ? DateTime.tryParse(map['dateOfBirth']) ?? DateTime(2000, 1, 1)
-          : DateTime(2000, 1, 1),
+      dateOfBirth: _parseDateTime(map['dateOfBirth']) ?? DateTime(2000, 1, 1),
       gender: map['gender'] ?? 'Other',
       bio: map['bio'] ?? '',
       profilePicUrl: map['profilePicUrl'] ?? '',
@@ -150,34 +170,35 @@ class UserModel {
           ? map['profileCompleted'] as bool
           : (map['bio'] != null && (map['bio'] as String).trim().isNotEmpty),
       isVerified: map['isVerified'] ?? false,
-      verifiedExpiry: map['verifiedExpiry'] != null
-          ? DateTime.tryParse(map['verifiedExpiry'])
-          : null,
+      verifiedExpiry: _parseDateTime(map['verifiedExpiry']),
       verificationPhoto: map['verificationPhoto'],
       isPremium: map['isPremium'] ?? false,
-      premiumExpiry: map['premiumExpiry'] != null
-          ? DateTime.tryParse(map['premiumExpiry'])
-          : null,
+      premiumExpiry: _parseDateTime(map['premiumExpiry']),
       dailyConnections: map['dailyConnections'] ?? 0,
-      dailyConnectionsDate: map['dailyConnectionsDate'] != null
-          ? DateTime.tryParse(map['dailyConnectionsDate'])
-          : null,
+      dailyConnectionsDate: _parseDateTime(map['dailyConnectionsDate']),
       monthlyConnections: map['monthlyConnections'] ?? 0,
-      monthlyConnectionsMonth: map['monthlyConnectionsMonth'] != null
-          ? DateTime.tryParse(map['monthlyConnectionsMonth'])
-          : null,
+      monthlyConnectionsMonth: _parseDateTime(map['monthlyConnectionsMonth']),
       followersCount: map['followersCount'] ?? 0,
       followingCount: map['followingCount'] ?? 0,
       communities: List<String>.from(map['communities'] ?? []),
       blockedUserIds: List<String>.from(map['blockedUserIds'] ?? []),
+      locationNotificationSubscriptions:
+          List<String>.from(map['locationNotificationSubscriptions'] ?? []),
       isOnline: map['isOnline'] ?? false,
-      lastSeen: map['lastSeen'] != null
-          ? DateTime.tryParse(map['lastSeen']) ?? DateTime.now()
-          : DateTime.now(),
-      createdAt: map['createdAt'] != null
-          ? DateTime.tryParse(map['createdAt']) ?? DateTime.now()
-          : DateTime.now(),
+      lastSeen: _parseDateTime(map['lastSeen']),
+      createdAt: _parseDateTime(map['createdAt']) ?? DateTime.now(),
+      typingInConnectionId: map['typingInConnectionId'],
+      typingUpdatedAt: _parseDateTime(map['typingUpdatedAt']),
     );
+  }
+
+  bool isUserTypingInConnection(String connectionId) {
+    if (typingInConnectionId == null || typingInConnectionId != connectionId) {
+      return false;
+    }
+    if (typingUpdatedAt == null) return false;
+    final diff = DateTime.now().difference(typingUpdatedAt!).inSeconds;
+    return diff >= 0 && diff < 5;
   }
 
   UserModel copyWith({
@@ -204,8 +225,13 @@ class UserModel {
     int? followingCount,
     List<String>? communities,
     List<String>? blockedUserIds,
+    List<String>? locationNotificationSubscriptions,
     bool? isOnline,
     DateTime? lastSeen,
+    bool clearLastSeen = false,
+    String? typingInConnectionId,
+    DateTime? typingUpdatedAt,
+    bool clearTyping = false,
   }) {
     return UserModel(
       id: id,
@@ -235,9 +261,17 @@ class UserModel {
       followingCount: followingCount ?? this.followingCount,
       communities: communities ?? this.communities,
       blockedUserIds: blockedUserIds ?? this.blockedUserIds,
+      locationNotificationSubscriptions: locationNotificationSubscriptions ??
+          this.locationNotificationSubscriptions,
       isOnline: isOnline ?? this.isOnline,
-      lastSeen: lastSeen ?? this.lastSeen,
+      lastSeen: clearLastSeen ? null : (lastSeen ?? this.lastSeen),
       createdAt: createdAt,
+      typingInConnectionId: clearTyping
+          ? null
+          : (typingInConnectionId ?? this.typingInConnectionId),
+      typingUpdatedAt: clearTyping
+          ? null
+          : (typingUpdatedAt ?? this.typingUpdatedAt),
     );
   }
 }

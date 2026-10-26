@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../config/app_colors.dart';
-import '../../models/connection_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/post_provider.dart';
 import '../../providers/connection_provider.dart';
@@ -12,7 +11,6 @@ import '../../services/database_service.dart';
 import '../../widgets/status_badge.dart';
 import '../../widgets/post_card.dart';
 import '../../widgets/contact_reveal_card.dart';
-import '../../widgets/gradient_button.dart';
 import '../../widgets/verification_modal.dart';
 import '../../widgets/crushie_avatar.dart';
 import '../../widgets/report_modal.dart';
@@ -22,8 +20,9 @@ import '../../services/firestore_service.dart';
 import '../../models/user_model.dart';
 import '../premium/premium_subscription_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   final String? userId; // Null means current user profile
+  final UserModel? user;
   final VoidCallback? onOpenSettings;
   final VoidCallback? onOpenVerification;
   final VoidCallback? onOpenPremium;
@@ -31,10 +30,18 @@ class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     Key? key,
     this.userId,
+    this.user,
     this.onOpenSettings,
     this.onOpenVerification,
     this.onOpenPremium,
   }) : super(key: key);
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  int _refreshCounter = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -46,21 +53,30 @@ class ProfileScreen extends StatelessWidget {
     final dbService = DatabaseService();
 
     final currentUser = authProv.currentUser;
-    final targetUserId = userId ?? currentUser?.id ?? '';
+    final targetUserId = widget.user?.id ?? widget.userId ?? currentUser?.id ?? '';
     final isSelf = currentUser != null &&
         targetUserId.isNotEmpty &&
         currentUser.id == targetUserId;
 
     if (isSelf) {
-      if (currentUser == null) {
-        return const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        );
-      }
       return _buildProfileScaffold(
         context: context,
-        user: currentUser,
+        user: widget.user ?? currentUser,
         isSelf: true,
+        currentUser: currentUser,
+        userProv: userProv,
+        dbService: dbService,
+        postProv: postProv,
+        connProv: connProv,
+        isDark: isDark,
+      );
+    }
+
+    if (widget.user != null) {
+      return _buildProfileScaffold(
+        context: context,
+        user: widget.user!,
+        isSelf: false,
         currentUser: currentUser,
         userProv: userProv,
         dbService: dbService,
@@ -101,6 +117,20 @@ class ProfileScreen extends StatelessWidget {
         }
 
         if (snapshot.hasError) {
+          final cachedUser = dbService.getUser(targetUserId);
+          if (cachedUser != null) {
+            return _buildProfileScaffold(
+              context: context,
+              user: cachedUser,
+              isSelf: false,
+              currentUser: currentUser,
+              userProv: userProv,
+              dbService: dbService,
+              postProv: postProv,
+              connProv: connProv,
+              isDark: isDark,
+            );
+          }
           final error = snapshot.error;
           final errorMsg = error is FirebaseException &&
                   error.code == 'permission-denied'
@@ -176,26 +206,27 @@ class ProfileScreen extends StatelessWidget {
     final isBlocked =
         currentUser != null && userProv.isUserBlocked(currentUser.id, user.id);
     final isFollowing = userProv.isFollowing(user.id);
+    final isPending = currentUser != null &&
+        userProv.isFollowPending(user.id, currentUserId: currentUser.id);
+
+    if (currentUser != null) {
+      userProv.initUserFollowing(currentUser.id);
+    }
     final userPosts =
         postProv.filteredPosts.where((p) => p.userId == user.id).toList();
 
-    final isConnected = currentUser != null &&
-        dbService.connections.any((c) =>
-            ((c.senderId == currentUser.id && c.recipientId == user.id) ||
-                (c.senderId == user.id && c.recipientId == currentUser.id)) &&
-            c.status == ConnectionStatus.accepted);
-
-    // Contact details are strictly gated: Only Premium users (or self) can view contact details
-    final canViewPrivateDetails = isSelf || (currentUser?.isPremium ?? false);
+    // Contact details are fail-closed: External contact access is disabled
+    // pending server-side entitlement verification. Users can only view their own.
+    final canViewPrivateDetails = isSelf;
 
     return Scaffold(
       appBar: AppBar(
         title: Text('@${user.username}'),
         actions: [
-          if (isSelf && onOpenSettings != null)
+          if (isSelf && widget.onOpenSettings != null)
             IconButton(
               icon: const Icon(Icons.settings_outlined),
-              onPressed: onOpenSettings,
+              onPressed: widget.onOpenSettings,
             )
           else if (!isSelf && currentUser != null)
             PopupMenuButton<String>(
@@ -257,8 +288,18 @@ class ProfileScreen extends StatelessWidget {
             ),
         ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
+      body: RefreshIndicator(
+        onRefresh: () async {
+          if (mounted) {
+            setState(() {
+              _refreshCounter++;
+            });
+          }
+          await postProv.fetchPosts();
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
           children: [
             // Cover Header & Avatar
             Stack(
@@ -508,33 +549,65 @@ class ProfileScreen extends StatelessWidget {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () {
-                          Provider.of<UserProvider>(context, listen: false)
-                              .toggleFollow(
-                            currentUser.id,
-                            user.id,
-                            targetUsername: user.username,
-                          );
-                        },
+                        onPressed: isPending
+                            ? null
+                            : () async {
+                                try {
+                                  await Provider.of<UserProvider>(context,
+                                          listen: false)
+                                      .toggleFollow(
+                                    currentUser.id,
+                                    user.id,
+                                    targetUsername: user.username,
+                                  );
+                                  if (mounted) {
+                                    setState(() {
+                                      _refreshCounter++;
+                                    });
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            'Failed to update follow: $e'),
+                                        backgroundColor: Colors.red.shade700,
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(24)),
                           side: BorderSide(
-                              color:
-                                  isFollowing ? Colors.grey : AppColors.primary,
+                              color: isFollowing
+                                  ? Colors.grey
+                                  : AppColors.primary,
                               width: 1.5),
                         ),
-                        child: Text(
-                          isFollowing ? 'Following' : '+ Follow',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color:
-                                isFollowing ? Colors.grey : AppColors.primary,
-                          ),
-                        ),
+                        child: isPending
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.primary),
+                                ),
+                              )
+                            : Text(
+                                isFollowing ? 'Following' : '+ Follow',
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: isFollowing
+                                      ? Colors.grey
+                                      : AppColors.primary,
+                                ),
+                              ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -572,18 +645,12 @@ class ProfileScreen extends StatelessWidget {
             ],
 
             // Stats Counters (Posts, Followers, Following)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildStatItem('Posts', userPosts.length.toString(), isDark),
-                  _buildStatItem(
-                      'Followers', user.followersCount.toString(), isDark),
-                  _buildStatItem(
-                      'Following', user.followingCount.toString(), isDark),
-                ],
-              ),
+            ProfileStatsSection(
+              key: ValueKey('${user.id}_$_refreshCounter'),
+              user: user,
+              isSelf: isSelf,
+              postCount: userPosts.length,
+              isDark: isDark,
             ),
             const SizedBox(height: 20),
 
@@ -658,13 +725,13 @@ class ProfileScreen extends StatelessWidget {
                               size: 42, color: AppColors.primary),
                           const SizedBox(height: 10),
                           const Text(
-                            'Contact Info Locked',
+                            'Direct Contact Unavailable',
                             style: TextStyle(
                                 fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Preferred contact method is hidden. Only Crushie Premium members can view direct contact details (WhatsApp, Phone, Email, Telegram).',
+                            'External contact access (WhatsApp, Phone) is temporarily disabled pending server-side verification. Please connect and chat securely within Crushie.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 12.5,
@@ -672,21 +739,6 @@ class ProfileScreen extends StatelessWidget {
                                   ? AppColors.darkTextSecondary
                                   : AppColors.lightTextSecondary,
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          GradientButton(
-                            text: 'Upgrade to Premium to Unlock Contact',
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => PremiumSubscriptionScreen(
-                                    onSubscriptionSuccess: () =>
-                                        Navigator.pop(context),
-                                  ),
-                                ),
-                              );
-                            },
                           ),
                         ],
                       ),
@@ -733,34 +785,10 @@ class ProfileScreen extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 
-  Widget _buildStatItem(String label, String value, bool isDark) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color:
-                isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: isDark
-                ? AppColors.darkTextSecondary
-                : AppColors.lightTextSecondary,
-          ),
-        ),
-      ],
-    );
-  }
 
   void _showFullScreenImage(BuildContext context, String imageUrl) {
     showDialog(
@@ -802,5 +830,178 @@ class ProfileScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class ProfileStatsSection extends StatefulWidget {
+  final UserModel user;
+  final bool isSelf;
+  final int postCount;
+  final bool isDark;
+
+  const ProfileStatsSection({
+    super.key,
+    required this.user,
+    required this.isSelf,
+    required this.postCount,
+    required this.isDark,
+  });
+
+  @override
+  State<ProfileStatsSection> createState() => _ProfileStatsSectionState();
+}
+
+class _ProfileStatsSectionState extends State<ProfileStatsSection> {
+  int? _derivedFollowersCount;
+  int? _derivedFollowingCount;
+  bool? _initialIsFollowing;
+  bool _isLoading = true;
+  bool _followersLoadFailed = false;
+  bool _followingLoadFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCounts();
+  }
+
+  Future<void> _loadCounts() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _followersLoadFailed = false;
+      _followingLoadFailed = false;
+    });
+
+    final userProv = Provider.of<UserProvider>(context, listen: false);
+    _initialIsFollowing = userProv.isFollowing(widget.user.id);
+
+    try {
+      final followersFuture = userProv.getFollowersCount(widget.user.id);
+      final followingFuture = widget.isSelf
+          ? Future.value(userProv.followingCount)
+          : userProv.getFollowingCount(widget.user.id);
+
+      final results = await Future.wait([followersFuture, followingFuture]);
+      if (mounted) {
+        setState(() {
+          _derivedFollowersCount = results[0];
+          _followersLoadFailed = results[0] == null;
+          _derivedFollowingCount = results[1];
+          _followingLoadFailed = results[1] == null;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[PROFILE] Error loading derived follow counts: $e');
+      if (mounted) {
+        setState(() {
+          _followersLoadFailed = true;
+          _followingLoadFailed = true;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final userProv = Provider.of<UserProvider>(context);
+
+    // Following count:
+    // If own profile, derived in real-time directly from UserProvider stream.
+    // If another user's profile, derived from relationship documents via count aggregation.
+    // If failed, displays '-' instead of false 0, allowing tap-to-retry.
+    final String displayedFollowing;
+    if (widget.isSelf) {
+      displayedFollowing = userProv.followingCount.toString();
+    } else if (_isLoading) {
+      displayedFollowing = '...';
+    } else if (_followingLoadFailed || _derivedFollowingCount == null) {
+      displayedFollowing = '-';
+    } else {
+      displayedFollowing = _derivedFollowingCount.toString();
+    }
+
+    // Followers count:
+    // Derived from collectionGroup('follows') aggregation, with optimistic adjustment for current viewer follow actions.
+    // If failed, displays '-' instead of false 0, allowing tap-to-retry.
+    final String displayedFollowers;
+    if (_isLoading) {
+      displayedFollowers = '...';
+    } else if (_followersLoadFailed || _derivedFollowersCount == null) {
+      displayedFollowers = '-';
+    } else {
+      int baseCount = _derivedFollowersCount!;
+      if (!widget.isSelf && _initialIsFollowing != null) {
+        final currentFollowing = userProv.isFollowing(widget.user.id);
+        baseCount = (baseCount +
+                (currentFollowing ? 1 : 0) -
+                (_initialIsFollowing! ? 1 : 0))
+            .clamp(0, 9999999);
+      }
+      displayedFollowers = baseCount.toString();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildStatItem('Posts', widget.postCount.toString(), widget.isDark),
+          _buildStatItem(
+            'Followers',
+            displayedFollowers,
+            widget.isDark,
+            onTap: displayedFollowers == '-' ? _loadCounts : null,
+          ),
+          _buildStatItem(
+            'Following',
+            displayedFollowing,
+            widget.isDark,
+            onTap: displayedFollowing == '-' ? _loadCounts : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, String value, bool isDark,
+      {VoidCallback? onTap}) {
+    final column = Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color:
+                isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: isDark
+                ? AppColors.darkTextSecondary
+                : AppColors.lightTextSecondary,
+          ),
+        ),
+      ],
+    );
+
+    if (onTap != null) {
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          child: column,
+        ),
+      );
+    }
+    return column;
   }
 }

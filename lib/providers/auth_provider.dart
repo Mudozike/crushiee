@@ -21,6 +21,7 @@ class AuthProvider extends ChangeNotifier {
   UserModel? get currentUser => _authService.currentUser;
   bool get isAuthenticated => currentUser != null;
 
+  fb_auth.User? get firebaseUser => _authService.firebaseUser;
   bool get isGoogleUser => _authService.isGoogleUser;
   bool get isEmailVerified => _authService.isEmailVerified;
 
@@ -256,6 +257,8 @@ class AuthProvider extends ChangeNotifier {
               followingCount: updatedUser.followingCount,
               communities: updatedUser.communities,
               blockedUserIds: updatedUser.blockedUserIds,
+              locationNotificationSubscriptions:
+                  updatedUser.locationNotificationSubscriptions,
               isOnline: updatedUser.isOnline,
               lastSeen: updatedUser.lastSeen,
               createdAt: updatedUser.createdAt,
@@ -373,7 +376,8 @@ class AuthProvider extends ChangeNotifier {
     }
 
     final current = currentUser;
-    if (current == null || current.id != userId) {
+    final authedUid = current?.id ?? _authService.firebaseUser?.uid;
+    if (authedUid == null || authedUid != userId) {
       _errorMessage =
           'Unauthorized: You cannot delete another user\'s account.';
       _errorCode = 'unauthorized';

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11,8 +12,12 @@ import '../../models/chat_message_model.dart';
 import '../../models/report_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/connection_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../models/user_model.dart';
 import '../../services/database_service.dart';
+import '../../services/firestore_service.dart';
 import '../../services/storage_service.dart';
 import '../../widgets/contact_reveal_card.dart';
 import '../../widgets/status_badge.dart';
@@ -136,47 +141,324 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Stream<List<ChatMessageModel>>? _messagesStream;
+  Stream<UserModel?>? _otherUserStream;
+  String? _streamConnectionId;
+  int _streamRetryCounter = 0;
+  Timer? _otherUserTypingExpirationTimer;
+  final FirestoreService _firestoreService = FirestoreService();
+
+  bool _hasInitiallyScrolledToBottom = false;
+  int _lastRenderedMessageCount = 0;
+
+  // --- TEMPORARY DEVELOPER DIAGNOSTICS ---
+  String? _diagnosticMarkAsReadError;
+  String? _diagnosticPaginationError;
+
+  static String _redactConnectionId(String id) {
+    if (id.isEmpty) return '<empty>';
+    if (id.length <= 8) return 'conn_***';
+    return '${id.substring(0, 5)}...${id.substring(id.length - 3)}';
+  }
+
+  static String _categorizeDiagnosticError(dynamic error) {
+    if (error == null) return 'UNKNOWN';
+    final s = error.toString().toLowerCase();
+    if (s.contains('permission-denied') ||
+        s.contains('insufficient permissions') ||
+        s.contains('permission_denied')) {
+      return 'PERMISSION_DENIED';
+    }
+    if (s.contains('not-found') ||
+        s.contains('not_found') ||
+        s.contains('document not found') ||
+        s.contains('cursor document not found')) {
+      return 'DOCUMENT_NOT_FOUND';
+    }
+    if (s.contains('failed-precondition') ||
+        s.contains('index') ||
+        s.contains('invalid-argument')) {
+      return 'QUERY_OR_INDEX_ERROR';
+    }
+    if (s.contains('network') ||
+        s.contains('unavailable') ||
+        s.contains('timeout') ||
+        s.contains('deadline-exceeded') ||
+        s.contains('connection closed') ||
+        s.contains('interrupted')) {
+      return 'NETWORK_ERROR';
+    }
+    if (s.contains('formatexception') ||
+        s.contains('typeerror') ||
+        s.contains('nosuchmethoderror') ||
+        s.contains('is not a subtype of')) {
+      return 'PARSING_ERROR';
+    }
+    if (s.contains('no firebase app') || s.contains('core/no-app')) {
+      return 'NO_FIREBASE_APP_INITIALIZED';
+    }
+    return 'RUNTIME_ERROR';
+  }
+
+  static String _formatDiagnosticDetail(dynamic error) {
+    if (error == null) return 'Unknown error';
+    if (error is FirebaseException) {
+      final code = error.code.isNotEmpty ? '[${error.code}] ' : '';
+      return '$code${error.message ?? error.toString()}';
+    }
+    return error.toString();
+  }
+
+  void _logDiagnostic({
+    required String operation,
+    required String connectionId,
+    required dynamic error,
+  }) {
+    final category = _categorizeDiagnosticError(error);
+    final detail = _formatDiagnosticDetail(error);
+    final redactedId = _redactConnectionId(connectionId);
+    final path = 'connections/$redactedId/messages';
+    debugPrint(
+      '[DEV_DIAGNOSTIC] Op: $operation | Category: $category | Path: $path | Error: $detail',
+    );
+  }
+
+  void _initMessagesStream({bool force = false}) {
+    if (!force &&
+        _messagesStream != null &&
+        _streamConnectionId == widget.connection.id) {
+      return;
+    }
+    _streamConnectionId = widget.connection.id;
+    final chatProv = Provider.of<ChatProvider>(context, listen: false);
+    _messagesStream =
+        chatProv.getChatMessagesStream(widget.connection.id, limit: 50);
+
+    final authProv = Provider.of<AuthProvider>(context, listen: false);
+    final activeUserId = authProv.currentUser?.id ?? '';
+    final String otherUserId = widget.connection.senderId == activeUserId
+        ? widget.connection.recipientId
+        : widget.connection.senderId;
+    if (otherUserId.isNotEmpty) {
+      try {
+        _otherUserStream = _firestoreService.getUserStream(otherUserId);
+      } catch (e) {
+        debugPrint('[CHAT_SCREEN] Error setting up user stream: $e');
+        _otherUserStream = null;
+      }
+    }
+  }
+
+  bool _isLoadingOlder = false;
+
+  void _onChatScroll() {
+    if (_scrollController.hasClients &&
+        _scrollController.position.pixels <= 100 &&
+        !_isLoadingOlder) {
+      final chatProv = Provider.of<ChatProvider>(context, listen: false);
+      if (chatProv.hasMoreOlderMessages(widget.connection.id) &&
+          !chatProv.isLoadingOlderMessages(widget.connection.id)) {
+        _fetchOlderMessages();
+      }
+    }
+  }
+
+  Future<void> _fetchOlderMessages() async {
+    if (_isLoadingOlder) return;
+    _isLoadingOlder = true;
+    try {
+      final chatProv = Provider.of<ChatProvider>(context, listen: false);
+      final authProv = Provider.of<AuthProvider>(context, listen: false);
+      final activeUserId = authProv.currentUser?.id;
+
+      final prevPixels = _scrollController.hasClients
+          ? _scrollController.position.pixels
+          : 0.0;
+      final prevMaxScroll = _scrollController.hasClients
+          ? _scrollController.position.maxScrollExtent
+          : 0.0;
+
+      await chatProv.loadOlderMessages(widget.connection.id,
+          userId: activeUserId);
+
+      if (mounted && _diagnosticPaginationError != null) {
+        setState(() {
+          _diagnosticPaginationError = null;
+        });
+      }
+
+      // Preserve relative scroll offset after prepending older messages
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          final newMaxScroll = _scrollController.position.maxScrollExtent;
+          final diff = newMaxScroll - prevMaxScroll;
+          if (diff > 0) {
+            _scrollController.jumpTo(prevPixels + diff);
+          }
+        }
+      });
+    } catch (e) {
+      _logDiagnostic(
+        operation: 'loadOlderMessages',
+        connectionId: widget.connection.id,
+        error: e,
+      );
+      if (mounted) {
+        setState(() {
+          _diagnosticPaginationError =
+              '[${_categorizeDiagnosticError(e)}] ${_formatDiagnosticDetail(e)}';
+        });
+      }
+    } finally {
+      _isLoadingOlder = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance?.addPostFrameCallback((_) {
-      _markAsRead();
+    _scrollController.addListener(_onChatScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        try {
+          Provider.of<NotificationProvider>(context, listen: false)
+              .activeConversationConnectionId = widget.connection.id;
+        } catch (_) {}
+        _markAsRead();
+      }
     });
   }
 
   @override
-  void dispose() {
-    _msgController.dispose();
-    _scrollController.dispose();
-    _typingTimer?.cancel();
-    super.dispose();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _initMessagesStream();
   }
 
-  void _markAsRead() {
-    final authProv = Provider.of<AuthProvider>(context, listen: false);
-    final chatProv = Provider.of<ChatProvider>(context, listen: false);
-    final user = authProv.currentUser;
-    if (user != null) {
-      chatProv.markMessagesAsRead(widget.connection.id, user.id);
+  @override
+  void didUpdateWidget(ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.connection.id != widget.connection.id) {
+      _hasInitiallyScrolledToBottom = false;
+      _lastRenderedMessageCount = 0;
+      _otherUserTypingExpirationTimer?.cancel();
+      _typingTimer?.cancel();
+      try {
+        final authProv = Provider.of<AuthProvider>(context, listen: false);
+        final user = authProv.currentUser;
+        if (user != null) {
+          final oldId = oldWidget.connection.id;
+          final uid = user.id;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            try {
+              if (mounted) {
+                final chatProv =
+                    Provider.of<ChatProvider>(context, listen: false);
+                chatProv.setTypingStatus(oldId, uid, false);
+              }
+            } catch (_) {}
+          });
+        }
+      } catch (_) {}
+      try {
+        Provider.of<NotificationProvider>(context, listen: false)
+            .activeConversationConnectionId = widget.connection.id;
+      } catch (_) {}
+      _initMessagesStream(force: true);
+      _markAsRead();
     }
   }
 
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent + 80,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
+  @override
+  void dispose() {
+    _typingTimer?.cancel();
+    _otherUserTypingExpirationTimer?.cancel();
+    try {
+      Provider.of<NotificationProvider>(context, listen: false)
+          .activeConversationConnectionId = null;
+    } catch (_) {}
+    try {
+      final authProv = Provider.of<AuthProvider>(context, listen: false);
+      final user = authProv.currentUser;
+      if (user != null) {
+        final chatProv = Provider.of<ChatProvider>(context, listen: false);
+        chatProv.setTypingStatus(widget.connection.id, user.id, false);
+      }
+    } catch (_) {}
+    _scrollController.removeListener(_onChatScroll);
+    _msgController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _markAsRead() async {
+    if (!mounted) return;
+    try {
+      final authProv = Provider.of<AuthProvider>(context, listen: false);
+      final chatProv = Provider.of<ChatProvider>(context, listen: false);
+      final user = authProv.currentUser;
+      if (user != null) {
+        try {
+          final connProv =
+              Provider.of<ConnectionProvider>(context, listen: false);
+          connProv.markConnectionAsReadLocally(widget.connection.id, user.id);
+        } catch (_) {}
+        try {
+          await chatProv.markMessagesAsRead(widget.connection.id, user.id);
+          if (mounted && _diagnosticMarkAsReadError != null) {
+            setState(() {
+              _diagnosticMarkAsReadError = null;
+            });
+          }
+        } catch (e) {
+          _logDiagnostic(
+            operation: 'markMessagesAsRead',
+            connectionId: widget.connection.id,
+            error: e,
+          );
+          if (mounted) {
+            setState(() {
+              _diagnosticMarkAsReadError =
+                  '[${_categorizeDiagnosticError(e)}] ${_formatDiagnosticDetail(e)}';
+            });
+          }
+        }
+      }
+    } catch (e) {
+      _logDiagnostic(
+        operation: 'markAsRead_outer',
+        connectionId: widget.connection.id,
+        error: e,
       );
+    }
+  }
+
+  void _scrollToBottom({bool animate = true}) {
+    if (_scrollController.hasClients) {
+      final target = _scrollController.position.maxScrollExtent;
+      if (animate) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
     }
   }
 
   void _onTextChanged(String text, String connectionId, String currentUserId) {
     final chatProv = Provider.of<ChatProvider>(context, listen: false);
+    if (text.trim().isEmpty) {
+      _typingTimer?.cancel();
+      chatProv.setTypingStatus(connectionId, currentUserId, false);
+      return;
+    }
     chatProv.setTypingStatus(connectionId, currentUserId, true);
 
     _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(seconds: 2), () {
+    _typingTimer = Timer(const Duration(seconds: 3), () {
       chatProv.setTypingStatus(connectionId, currentUserId, false);
     });
   }
@@ -213,92 +495,141 @@ class _ChatScreenState extends State<ChatScreen> {
         ? widget.connection.recipientId
         : widget.connection.senderId;
     final otherUser = dbService.getUser(otherUserId);
-    final otherUsername = otherUser?.username ??
+    final fallbackUsername = otherUser?.username ??
         (widget.connection.senderId == activeUserId
             ? widget.connection.recipientUsername
             : widget.connection.senderUsername);
-    final otherPic = otherUser?.profilePicUrl ??
+    final fallbackPic = otherUser?.profilePicUrl ??
         (widget.connection.senderId == activeUserId
             ? widget.connection.recipientProfilePic
             : widget.connection.senderProfilePic);
     final isBlocked = dbService.isUserBlocked(activeUserId, otherUserId);
-    final isOtherTyping =
-        chatProv.isUserTyping(widget.connection.id, otherUserId);
 
     final messages = chatProv.getMessagesForConnection(widget.connection.id,
         userId: activeUserId);
 
-    final isMascot = otherPic.startsWith('crushie_avatar_');
-    final mascotIdx = isMascot
-        ? (int.tryParse(otherPic.replaceAll('crushie_avatar_', '')) ?? 0)
-        : 0;
+    return StreamBuilder<UserModel?>(
+      stream: _otherUserStream,
+      builder: (context, userSnapshot) {
+        final liveOtherUser = userSnapshot.data ?? otherUser;
+        final liveUsername = liveOtherUser?.username ?? fallbackUsername;
+        final otherUsername = liveUsername;
+        final livePic = liveOtherUser?.profilePicUrl ?? fallbackPic;
+        final liveOnline = liveOtherUser?.isOnline ?? false;
+        final liveLastSeen = liveOtherUser?.lastSeen ?? otherUser?.lastSeen;
 
-    return Scaffold(
-      backgroundColor:
-          isDark ? AppColors.darkBackground : AppColors.lightBackground,
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: GestureDetector(
-          onTap: () => _openUserProfile(context, otherUserId),
-          child: Row(
-            children: [
-              // Clean Avatar (No duplicate dot on avatar in header)
-              if (isMascot)
-                CrushieAvatar(index: mascotIdx, radius: 18)
-              else
-                CircleAvatar(
-                  radius: 18,
-                  backgroundImage: CachedNetworkImageProvider(otherPic),
-                ),
-              const SizedBox(width: 10),
+        final bool isOtherTyping;
+        final isTypingInModel =
+            liveOtherUser?.isUserTypingInConnection(widget.connection.id) ??
+                false;
+        final isTypingInProvider =
+            chatProv.isUserTyping(widget.connection.id, otherUserId);
 
-              // Title & Single Status Line
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+        if (isTypingInModel) {
+          isOtherTyping = true;
+          final updatedAt = liveOtherUser?.typingUpdatedAt;
+          if (updatedAt != null) {
+            final elapsedMs =
+                DateTime.now().difference(updatedAt).inMilliseconds;
+            final remainingMs = 5000 - elapsedMs;
+            if (remainingMs > 0) {
+              _otherUserTypingExpirationTimer?.cancel();
+              _otherUserTypingExpirationTimer =
+                  Timer(Duration(milliseconds: remainingMs + 50), () {
+                if (mounted) setState(() {});
+              });
+            }
+          }
+        } else if (isTypingInProvider) {
+          isOtherTyping = true;
+        } else {
+          isOtherTyping = false;
+          _otherUserTypingExpirationTimer?.cancel();
+        }
+
+        final isMascot = livePic.startsWith('crushie_avatar_');
+        final mascotIdx = isMascot
+            ? (int.tryParse(livePic.replaceAll('crushie_avatar_', '')) ?? 0)
+            : 0;
+
+        return Scaffold(
+          resizeToAvoidBottomInset: true,
+          backgroundColor:
+              isDark ? AppColors.darkBackground : AppColors.lightBackground,
+          appBar: AppBar(
+            titleSpacing: 0,
+            title: GestureDetector(
+              onTap: () => _openUserProfile(context, otherUserId),
+              child: Row(
+                children: [
+                  // Clean Avatar (No duplicate dot on avatar in header)
+                  if (isMascot)
+                    CrushieAvatar(index: mascotIdx, radius: 18)
+                  else
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundImage: CachedNetworkImageProvider(livePic),
+                    ),
+                  const SizedBox(width: 10),
+
+                  // Title & Single Status Line
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Flexible(
-                          child: Text(
-                            '@$otherUsername',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.bold),
-                          ),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                '@$liveUsername',
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            if (liveOtherUser?.isVerified ?? false) ...[
+                              const SizedBox(width: 4),
+                              const Icon(Icons.verified,
+                                  color: AppColors.verifiedBlue, size: 14),
+                            ],
+                          ],
                         ),
-                        if (otherUser?.isVerified ?? false) ...[
-                          const SizedBox(width: 4),
-                          const Icon(Icons.verified,
-                              color: AppColors.verifiedBlue, size: 14),
-                        ],
+                        const SizedBox(height: 2),
+                        if (isOtherTyping)
+                          const Text(
+                            'typing...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w600,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          )
+                        else
+                          StatusBadge(
+                            isOnline: liveOnline,
+                            lastSeen: liveLastSeen,
+                            showText: true,
+                            dotSize: 8,
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    StatusBadge(
-                      isOnline: otherUser?.isOnline ?? false,
-                      lastSeen: otherUser?.lastSeen ?? DateTime.now(),
-                      showText: true,
-                      dotSize: 8,
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-        actions: [
-          // Three-Dot Popup Menu
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded),
-            onSelected: (val) {
-              if (val == 'profile') {
-                _openUserProfile(context, otherUserId);
-              } else if (val == 'mute') {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                      content: Text('Notifications muted for @$otherUsername')),
-                );
+            ),
+            actions: [
+              // Three-Dot Popup Menu
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (val) {
+                  if (val == 'profile') {
+                    _openUserProfile(context, otherUserId);
+                  } else if (val == 'mute') {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text('Notifications muted for @$liveUsername')),
+                    );
               } else if (val == 'clear') {
                 _showClearConversationConfirmation(
                     context, widget.connection.id, activeUserId, chatProv);
@@ -379,12 +710,13 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          // Unlocked Contact Method Card (Handled for blocked state)
+          // Unlocked Contact Method Card (Handled for blocked state and authorization)
           ContactRevealCard(
             contactMethod: widget.connection.recipientContactMethod,
             contactDetails: widget.connection.recipientContactDetails,
             username: otherUsername,
             isBlocked: isBlocked,
+            isPaid: widget.connection.isPaid && widget.connection.senderId == activeUserId,
           ),
 
           // Compact Professional Blocked Warning Banner
@@ -443,29 +775,38 @@ class _ChatScreenState extends State<ChatScreen> {
           // Messages Thread with Real-Time Stream Integration
           Expanded(
             child: StreamBuilder<List<ChatMessageModel>>(
-              stream: chatProv.getChatMessagesStream(widget.connection.id,
-                  limit: 50),
+              key: ValueKey('$_streamConnectionId-$_streamRetryCounter'),
+              stream: _messagesStream,
               builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  debugPrint(
+                      '[CHAT_SCREEN] Live messages stream error for connection ${widget.connection.id}: ${snapshot.error}');
+                }
                 // If waiting for first network response and no cached messages, show loading spinner
                 if (snapshot.connectionState == ConnectionState.waiting &&
-                    !snapshot.hasData) {
-                  if (messages.isEmpty) {
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
-                  }
+                    !snapshot.hasData &&
+                    messages.isEmpty) {
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
                 }
 
-                if (snapshot.hasError) {
+                if (snapshot.hasError && messages.isEmpty) {
+                  _logDiagnostic(
+                    operation: 'messagesStream_empty',
+                    connectionId: widget.connection.id,
+                    error: snapshot.error,
+                  );
                   return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24.0),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24.0, vertical: 16.0),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(Icons.error_outline,
-                              size: 48, color: Colors.red.shade400),
-                          const SizedBox(height: 12),
+                              size: 44, color: Colors.red.shade400),
+                          const SizedBox(height: 10),
                           Text(
                             'Failed to load messages',
                             style: TextStyle(
@@ -487,9 +828,59 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontSize: 13,
                             ),
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color: Colors.red.withOpacity(0.35)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(Icons.bug_report,
+                                        size: 14, color: Colors.red),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        'DIAGNOSTIC [${_categorizeDiagnosticError(snapshot.error)}]',
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.red),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _formatDiagnosticDetail(snapshot.error),
+                                  style: const TextStyle(
+                                      fontSize: 11, color: Colors.redAccent),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Path: connections/${_redactConnectionId(widget.connection.id)}/messages',
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.grey.shade600),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 14),
                           ElevatedButton.icon(
                             onPressed: () {
+                              _hasInitiallyScrolledToBottom = false;
+                              _lastRenderedMessageCount = 0;
+                              _streamRetryCounter++;
+                              _initMessagesStream(force: true);
                               setState(() {});
                             },
                             icon: const Icon(Icons.refresh, size: 18),
@@ -501,47 +892,286 @@ class _ChatScreenState extends State<ChatScreen> {
                   );
                 }
 
-                if (snapshot.hasData && snapshot.data != null) {
-                  final streamMsgs = snapshot.data!;
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) {
-                      chatProv.syncMessages(widget.connection.id, streamMsgs);
-                      final hasUnread = streamMsgs.any(
-                          (m) => m.recipientId == activeUserId && !m.isRead);
-                      if (hasUnread) {
-                        _markAsRead();
-                      }
-                    }
-                  });
-                }
-
-                final rawMessages = snapshot.data ?? messages;
-                final displayMessages = rawMessages
-                    .where((m) => !m.deletedForUserIds.contains(activeUserId))
-                    .toList();
-
-                if (displayMessages.isEmpty) {
+                // Abnormal stream completion without data or messages
+                if (snapshot.connectionState == ConnectionState.done &&
+                    !snapshot.hasData &&
+                    !snapshot.hasError &&
+                    messages.isEmpty) {
                   return Center(
-                    child: Text(
-                      'No messages yet. Say hi to @$otherUsername!',
-                      style: TextStyle(
-                        color: isDark
-                            ? AppColors.darkTextSecondary
-                            : AppColors.lightTextSecondary,
-                        fontSize: 14,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24.0, vertical: 16.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.sync_problem_rounded,
+                              size: 44, color: Colors.orange.shade400),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Connection interrupted',
+                            style: TextStyle(
+                              color: isDark
+                                  ? AppColors.darkTextPrimary
+                                  : AppColors.lightTextPrimary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Live stream closed unexpectedly. Tap to reconnect.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              _hasInitiallyScrolledToBottom = false;
+                              _lastRenderedMessageCount = 0;
+                              _streamRetryCounter++;
+                              _initMessagesStream(force: true);
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text('Reconnect'),
+                          ),
+                        ],
                       ),
                     ),
                   );
                 }
 
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: displayMessages.length,
-                  itemBuilder: (ctx, i) {
-                    final msg = displayMessages[i];
-                    final isMe = msg.senderId == activeUserId;
+                final targetId = widget.connection.id;
+                final List<ChatMessageModel>? streamMsgs =
+                    snapshot.hasData && snapshot.data != null
+                        ? snapshot.data!
+                            .where((m) =>
+                                m.connectionId == targetId ||
+                                m.connectionId.isEmpty)
+                            .toList()
+                        : null;
+
+                if (streamMsgs != null) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _streamConnectionId == widget.connection.id) {
+                      chatProv.syncMessages(widget.connection.id, streamMsgs);
+                      final unreadIncoming = streamMsgs.where((m) =>
+                          (m.recipientId == activeUserId ||
+                              (m.senderId.isNotEmpty &&
+                                  m.senderId != activeUserId)) &&
+                          !m.isRead);
+                      if (unreadIncoming.isNotEmpty) {
+                        final unreadIds =
+                            unreadIncoming.map((m) => m.id).toSet();
+                        final unreadInProvider = chatProv
+                            .getMessagesForConnection(widget.connection.id)
+                            .where((m) => unreadIds.contains(m.id) && !m.isRead);
+                        if (unreadInProvider.isNotEmpty) {
+                          _markAsRead();
+                        }
+                      }
+                    }
+                  });
+                }
+
+                final displayMessages = chatProv.getMergedMessages(
+                  widget.connection.id,
+                  streamMessages: streamMsgs,
+                  userId: activeUserId,
+                );
+
+                if (displayMessages.isNotEmpty) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted || !_scrollController.hasClients) return;
+                    if (!_hasInitiallyScrolledToBottom) {
+                      _scrollToBottom(animate: false);
+                      _hasInitiallyScrolledToBottom = true;
+                      _lastRenderedMessageCount = displayMessages.length;
+                    } else if (displayMessages.length > _lastRenderedMessageCount) {
+                      final isNearBottom =
+                          (_scrollController.position.maxScrollExtent -
+                                  _scrollController.position.pixels) <=
+                              300;
+                      if (isNearBottom) {
+                        _scrollToBottom(animate: true);
+                      }
+                      _lastRenderedMessageCount = displayMessages.length;
+                    }
+                  });
+                }
+
+                if (displayMessages.isEmpty) {
+                  return Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 16),
+                      child: Text(
+                        'No messages yet. Say hi to @$liveUsername!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                return Column(
+                  children: [
+                    if (snapshot.hasError)
+                      Container(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: Colors.red.withOpacity(0.25)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.warning_amber_rounded,
+                                    size: 16, color: Colors.red),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    'Unable to update live messages',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.red),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    _hasInitiallyScrolledToBottom = false;
+                                    _lastRenderedMessageCount = 0;
+                                    _streamRetryCounter++;
+                                    _initMessagesStream(force: true);
+                                    setState(() {});
+                                  },
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  child: const Text('Retry',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                  left: 24, top: 4, bottom: 2),
+                              child: Text(
+                                '[DEV DIAGNOSTIC] [${_categorizeDiagnosticError(snapshot.error)}] ${_formatDiagnosticDetail(snapshot.error)}\nPath: connections/${_redactConnectionId(widget.connection.id)}/messages',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.redAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_diagnosticMarkAsReadError != null)
+                      Container(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: Colors.amber.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.mark_chat_read_outlined,
+                                size: 16, color: Colors.amber),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '[DEV DIAGNOSTIC: MarkAsRead] $_diagnosticMarkAsReadError\nPath: connections/${_redactConnectionId(widget.connection.id)}/messages',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.amber),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_diagnosticPaginationError != null)
+                      Container(
+                        margin: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: Colors.orange.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.history_toggle_off,
+                                size: 16, color: Colors.orange),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '[DEV DIAGNOSTIC: Pagination] $_diagnosticPaginationError\nPath: connections/${_redactConnectionId(widget.connection.id)}/messages',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.orange),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        itemCount: displayMessages.length +
+                            (chatProv.isLoadingOlderMessages(widget.connection.id)
+                                ? 1
+                                : 0),
+                        itemBuilder: (ctx, i) {
+                          if (chatProv.isLoadingOlderMessages(widget.connection.id)) {
+                            if (i == 0) {
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 8),
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                                ),
+                              );
+                            }
+                            i -= 1;
+                          }
+                          final msg = displayMessages[i];
+                          final isMe = msg.senderId == activeUserId;
 
                     return GestureDetector(
                       onLongPress: () => _showMessageOptionsSheet(
@@ -655,7 +1285,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Text(
-                                    DateFormat('h:mm a').format(msg.timestamp),
+                                    DateFormat('h:mm a')
+                                        .format(msg.timestamp.toLocal()),
                                     style: TextStyle(
                                       fontSize: 10.5,
                                       color: isMe && !msg.isDeletedForEveryone
@@ -677,10 +1308,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     );
                   },
-                );
-              },
-            ),
-          ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
 
           // Typing Indicator
           if (isOtherTyping && !isBlocked)
@@ -698,7 +1332,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      '@$otherUsername is typing...',
+                      '@$liveUsername is typing...',
                       style: const TextStyle(
                         fontSize: 12,
                         fontStyle: FontStyle.italic,
@@ -746,151 +1380,178 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
-
           // Message Composer (Normal OR Clean Blocked State Replacement)
-          if (!isBlocked)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              color: isDark ? AppColors.darkSurface : Colors.white,
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.attach_file_rounded,
-                        color: AppColors.primary),
-                    onPressed: _showChatAttachmentOptionsSheet,
-                    tooltip: 'Send Attachment',
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _msgController,
-                      onChanged: (v) =>
-                          _onTextChanged(v, widget.connection.id, activeUserId),
-                      decoration: InputDecoration(
-                        hintText: 'Type a message to @$otherUsername...',
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 12),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide(
-                            color: isDark
-                                ? AppColors.darkBorder
-                                : AppColors.lightBorder,
+          SafeArea(
+            top: false,
+            child: !isBlocked
+                ? Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    color: isDark ? AppColors.darkSurface : Colors.white,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.attach_file_rounded,
+                              color: AppColors.primary),
+                          onPressed: _showChatAttachmentOptionsSheet,
+                          tooltip: 'Send Attachment',
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _msgController,
+                            onChanged: (v) => _onTextChanged(
+                                v, widget.connection.id, activeUserId),
+                            decoration: InputDecoration(
+                              hintText: 'Type a message to @$liveUsername...',
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 18, vertical: 12),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide(
+                                  color: isDark
+                                      ? AppColors.darkBorder
+                                      : AppColors.lightBorder,
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: const BorderSide(
+                                    color: AppColors.primary, width: 2),
+                              ),
+                            ),
                           ),
                         ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: const BorderSide(
-                              color: AppColors.primary, width: 2),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: AppColors.primaryGradient,
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.send_rounded,
-                          color: Colors.white, size: 20),
-                      onPressed: () async {
-                        final text = _msgController.text.trim();
-                        final mediaFile = _attachedMediaFile;
-                        if (text.isNotEmpty || mediaFile != null) {
-                          _msgController.clear();
-                          setState(() {
-                            _attachedMediaFile = null;
-                          });
+                        const SizedBox(width: 6),
+                        Container(
+                          decoration: const BoxDecoration(
+                            gradient: AppColors.primaryGradient,
+                            shape: BoxShape.circle,
+                          ),
+                          child: IconButton(
+                            icon: const Icon(Icons.send_rounded,
+                                color: Colors.white, size: 20),
+                            onPressed: () async {
+                              final messenger = ScaffoldMessenger.maybeOf(context);
+                              final text = _msgController.text.trim();
+                              final mediaFile = _attachedMediaFile;
+                              if (text.isNotEmpty || mediaFile != null) {
+                                _msgController.clear();
+                                setState(() {
+                                  _attachedMediaFile = null;
+                                });
+                                _typingTimer?.cancel();
+                                chatProv.setTypingStatus(
+                                    widget.connection.id, activeUserId, false);
 
-                          String? mediaUrl;
-                          if (mediaFile != null) {
-                            try {
-                              mediaUrl = await StorageService().uploadChatPhoto(
-                                connectionId: widget.connection.id,
-                                userId: activeUserId,
-                                file: mediaFile,
-                              );
-                            } catch (e) {
-                              debugPrint(
-                                  '[CHAT_SCREEN] Error uploading chat photo: $e');
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content:
-                                          Text('Failed to upload image: $e')),
-                                );
+                                String? mediaUrl;
+                                if (mediaFile != null) {
+                                  try {
+                                    mediaUrl =
+                                        await StorageService().uploadChatPhoto(
+                                      connectionId: widget.connection.id,
+                                      userId: activeUserId,
+                                      file: mediaFile,
+                                    );
+                                  } catch (e) {
+                                    debugPrint(
+                                        '[CHAT_SCREEN] Error uploading chat photo: $e');
+                                    if (mounted) {
+                                      messenger?.showSnackBar(
+                                        SnackBar(
+                                            content: Text(
+                                                'Failed to upload image: $e')),
+                                      );
+                                    }
+                                    return;
+                                  }
+                                }
+
+                                chatProv.sendMessage(
+                                  connectionId: widget.connection.id,
+                                  senderId: activeUserId,
+                                  recipientId: otherUserId,
+                                  text: text.isNotEmpty
+                                      ? text
+                                      : '📷 Photo attachment',
+                                  mediaUrl: mediaUrl,
+                                ).catchError((e) {
+                                  _logDiagnostic(
+                                    operation: 'sendMessage',
+                                    connectionId: widget.connection.id,
+                                    error: e,
+                                  );
+                                  if (mounted) {
+                                    messenger?.showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            '[DEV DIAGNOSTIC] Send failed [${_categorizeDiagnosticError(e)}]: ${_formatDiagnosticDetail(e)}'),
+                                        backgroundColor: Colors.red.shade700,
+                                        duration: const Duration(seconds: 4),
+                                      ),
+                                    );
+                                  }
+                                });
+                                chatProv.setTypingStatus(
+                                    widget.connection.id, activeUserId, false);
+                                _scrollToBottom();
                               }
-                              return;
-                            }
-                          }
-
-                          chatProv.sendMessage(
-                            connectionId: widget.connection.id,
-                            senderId: activeUserId,
-                            recipientId: otherUserId,
-                            text:
-                                text.isNotEmpty ? text : '📷 Photo attachment',
-                            mediaUrl: mediaUrl,
-                          );
-                          chatProv.setTypingStatus(
-                              widget.connection.id, activeUserId, false);
-                          _scrollToBottom();
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else
-            // Clean Composer Replacement State when Blocked
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              color: isDark ? AppColors.darkCard : Colors.grey.shade100,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text(
-                          'You blocked this user',
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.bold),
+                            },
+                          ),
                         ),
-                        SizedBox(height: 2),
-                        Text(
-                          'Unblock to send messages',
-                          style: TextStyle(fontSize: 11.5, color: Colors.grey),
+                      ],
+                    ),
+                  )
+                : Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 14),
+                    color: isDark ? AppColors.darkCard : Colors.grey.shade100,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                'You blocked this user',
+                                style: TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Unblock to send messages',
+                                style: TextStyle(
+                                    fontSize: 11.5, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            Provider.of<UserProvider>(context, listen: false)
+                                .unblockUser(activeUserId, otherUserId);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                          ),
+                          child: const Text('Unblock',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13)),
                         ),
                       ],
                     ),
                   ),
-                  ElevatedButton(
-                    onPressed: () {
-                      Provider.of<UserProvider>(context, listen: false)
-                          .unblockUser(activeUserId, otherUserId);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                    ),
-                    child: const Text('Unblock',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13)),
-                  ),
-                ],
-              ),
-            ),
+          ),
         ],
       ),
+    );
+      },
     );
   }
 
@@ -934,9 +1595,18 @@ class _ChatScreenState extends State<ChatScreen> {
             title: const Text('Delete for Me'),
             subtitle: const Text('Remove this message only from your view'),
             onTap: () {
+              final messenger = ScaffoldMessenger.maybeOf(context);
               Navigator.pop(ctx);
-              chatProv.deleteMessageForMe(
-                  widget.connection.id, message.id, currentUserId);
+              chatProv
+                  .deleteMessageForMe(
+                      widget.connection.id, message.id, currentUserId)
+                  .catchError((e) {
+                if (mounted) {
+                  messenger?.showSnackBar(
+                    SnackBar(content: Text('Failed to delete message: $e')),
+                  );
+                }
+              });
             },
           ),
           if (isMe)
@@ -945,9 +1615,17 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Delete for Everyone'),
               subtitle: const Text('Remove this message from both sides'),
               onTap: () {
+                final messenger = ScaffoldMessenger.maybeOf(context);
                 Navigator.pop(ctx);
-                chatProv.deleteMessageForEveryone(
-                    widget.connection.id, message.id);
+                chatProv
+                    .deleteMessageForEveryone(widget.connection.id, message.id)
+                    .catchError((e) {
+                  if (mounted) {
+                    messenger?.showSnackBar(
+                      SnackBar(content: Text('Failed to delete message: $e')),
+                    );
+                  }
+                });
               },
             )
           else

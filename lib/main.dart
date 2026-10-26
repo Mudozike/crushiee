@@ -17,6 +17,8 @@ import 'screens/auth/email_verification_screen.dart';
 import 'screens/profile/profile_setup_screen.dart' as profile_setup;
 import 'screens/main_navigation_screen.dart';
 import 'services/database_service.dart';
+import 'services/firestore_service.dart';
+import 'services/push_notification_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'firebase_options.dart';
@@ -32,6 +34,11 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  try {
+    await PushNotificationService().initialize();
+  } catch (e) {
+    debugPrint('[PUSH] PushNotificationService initialization warning: $e');
+  }
   runApp(
     MultiProvider(
       providers: [
@@ -67,7 +74,7 @@ class CrushieApp extends StatefulWidget {
 }
 
 class _CrushieAppState extends State<CrushieApp> {
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  GlobalKey<NavigatorState> get _navigatorKey => PushNotificationService.navigatorKey;
   AppScreenState _currentScreen = AppScreenState.splash;
   String _unverifiedEmail = 'user@crushie.app';
   // Set to true once Firebase auth state + Firestore profile have been checked.
@@ -86,13 +93,25 @@ class _CrushieAppState extends State<CrushieApp> {
       Provider.of<ChatProvider>(context, listen: false).clear();
     }
 
-    // 3. Await Firebase sign-out operation if user is still authenticated
+    // 3. Clear presence and typing in Firestore while still authenticated
     final authProv = Provider.of<AuthProvider>(context, listen: false);
+    final user = authProv.currentUser;
+    if (user != null && user.id.isNotEmpty) {
+      try {
+        await PushNotificationService().clearUserToken(user.id);
+        await FirestoreService().setUserTyping(user.id, null);
+        await FirestoreService().updateUserPresence(user.id, isOnline: false);
+      } catch (e) {
+        debugPrint('[LOGOUT] Error clearing presence/typing/push token: $e');
+      }
+    }
+
+    // 4. Await Firebase sign-out operation if user is still authenticated
     if (authProv.isAuthenticated) {
       await authProv.signOut();
     }
 
-    // 4. Reset top-level screen state to public landing screen
+    // 5. Reset top-level screen state to public landing screen
     if (mounted) {
       setState(() {
         _currentScreen = AppScreenState.landing;
@@ -128,6 +147,7 @@ class _CrushieAppState extends State<CrushieApp> {
           try {
             final authProv = Provider.of<AuthProvider>(context, listen: false);
             await authProv.reloadUserProfile(uid);
+            PushNotificationService().registerUserToken(uid);
             if (mounted) {
               Provider.of<UserProvider>(context, listen: false)
                   .initUserFollowing(uid);

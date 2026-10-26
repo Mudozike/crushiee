@@ -13,6 +13,7 @@ class DatabaseService extends ChangeNotifier {
   static final DatabaseService _instance = DatabaseService._internal();
   factory DatabaseService() => _instance;
   DatabaseService._internal();
+  DatabaseService.forTesting();
 
   FirebaseFirestore get _firestore => FirebaseFirestore.instance;
   FirestoreService get _firestoreService => FirestoreService();
@@ -34,6 +35,9 @@ class DatabaseService extends ChangeNotifier {
 
   bool isFollowing(String targetUserId) =>
       _followingUserIds.contains(targetUserId);
+
+  Set<String> get followingUserIds => Set.unmodifiable(_followingUserIds);
+  int get followingCount => _followingUserIds.length;
 
   void setPosts(List<PostModel> newPosts) {
     _posts.clear();
@@ -118,6 +122,14 @@ class DatabaseService extends ChangeNotifier {
   void clearFollowing() {
     _followingUserIds.clear();
     notifyListeners();
+  }
+
+  void setFollowState(
+      String currentUserId, String targetUserId, bool following) {
+    if (currentUserId == targetUserId) return;
+    final isCurrentlyFollowing = _followingUserIds.contains(targetUserId);
+    if (isCurrentlyFollowing == following) return;
+    toggleFollow(currentUserId, targetUserId);
   }
 
   void toggleFollow(String currentUserId, String targetUserId) {
@@ -511,11 +523,25 @@ class DatabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void removeChatMessage(String messageId) {
+    _chatMessages.removeWhere((m) => m.id == messageId);
+    notifyListeners();
+  }
+
+  void setChatMessagesForConnection(
+      String connectionId, List<ChatMessageModel> messages) {
+    _chatMessages.removeWhere((m) => m.connectionId == connectionId);
+    _chatMessages.addAll(messages);
+    notifyListeners();
+  }
+
   void markMessagesAsRead(String connectionId, String currentUserId) {
     bool changed = false;
     for (int i = 0; i < _chatMessages.length; i++) {
       final m = _chatMessages[i];
-      if (m.connectionId == connectionId && !m.isRead) {
+      if (m.connectionId == connectionId &&
+          (m.recipientId.isEmpty || m.recipientId == currentUserId) &&
+          !m.isRead) {
         _chatMessages[i] = m.copyWith(
           isRead: true,
           deliveryStatus: MessageDeliveryStatus.read,

@@ -7,7 +7,7 @@ class PostModel {
   final String userProfilePic;
   final bool userIsVerified;
   final bool userIsOnline;
-  final DateTime userLastSeen;
+  final DateTime? userLastSeen;
   final String userCountry;
   final String userCity;
   
@@ -63,8 +63,8 @@ class PostModel {
     required this.username,
     required this.userProfilePic,
     this.userIsVerified = false,
-    this.userIsOnline = true,
-    DateTime? userLastSeen,
+    this.userIsOnline = false,
+    this.userLastSeen,
     required this.userCountry,
     required this.userCity,
     required this.community,
@@ -86,8 +86,7 @@ class PostModel {
     this.isActive = true,
     DateTime? createdAt,
     DateTime? expiresAt,
-  })  : userLastSeen = userLastSeen ?? DateTime.now(),
-        createdAt = createdAt ?? DateTime.now(),
+  })  : createdAt = createdAt ?? DateTime.now(),
         expiresAt = expiresAt ?? (createdAt ?? DateTime.now()).add(const Duration(days: 30)),
         mediaUrl = isValidRemoteMediaUrl(mediaUrl ?? postImageUrl) ? (mediaUrl ?? postImageUrl) : null,
         mediaType = isValidRemoteMediaUrl(mediaUrl ?? postImageUrl)
@@ -119,7 +118,7 @@ class PostModel {
       'userProfilePic': userProfilePic,
       'userIsVerified': userIsVerified,
       'userIsOnline': userIsOnline,
-      'userLastSeen': userLastSeen.toIso8601String(),
+      'userLastSeen': userLastSeen?.toIso8601String(),
       'userCountry': userCountry,
       'userCity': userCity,
       'community': community,
@@ -169,7 +168,7 @@ class PostModel {
       userProfilePic: map['userProfilePic'] ?? '',
       userIsVerified: map['userIsVerified'] ?? false,
       userIsOnline: map['userIsOnline'] ?? false,
-      userLastSeen: _parseDateTime(map['userLastSeen']) ?? DateTime.now(),
+      userLastSeen: _parseDateTime(map['userLastSeen']),
       userCountry: map['userCountry'] ?? '',
       userCity: map['userCity'] ?? '',
       community: map['community'] ?? 'Casual Meet',
@@ -211,6 +210,8 @@ class PostModel {
     bool? isBoosted,
     DateTime? boostExpiresAt,
     bool? isActive,
+    bool? userIsOnline,
+    DateTime? userLastSeen,
   }) {
     return PostModel(
       id: id,
@@ -218,8 +219,8 @@ class PostModel {
       username: username,
       userProfilePic: userProfilePic,
       userIsVerified: userIsVerified,
-      userIsOnline: userIsOnline,
-      userLastSeen: userLastSeen,
+      userIsOnline: userIsOnline ?? this.userIsOnline,
+      userLastSeen: userLastSeen ?? this.userLastSeen,
       userCountry: userCountry,
       userCity: userCity,
       community: community ?? this.community,

@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 enum ConnectionStatus { pending, accepted, declined }
 
 class ConnectionModel {
@@ -105,25 +107,47 @@ class ConnectionModel {
       'amount': amount,
       'status': status.name,
       'participants': participants,
-      'createdAt': createdAt.toIso8601String(),
-      'updatedAt': updatedAt.toIso8601String(),
+      'createdAt': createdAt.toUtc().toIso8601String(),
+      'updatedAt': updatedAt.toUtc().toIso8601String(),
       'lastMessageText': lastMessageText,
-      'lastMessageTimestamp': lastMessageTimestamp?.toIso8601String(),
+      'lastMessageTimestamp': lastMessageTimestamp?.toUtc().toIso8601String(),
       'lastMessageSenderId': lastMessageSenderId,
       'unreadCounts': unreadCounts,
     };
   }
 
+  static DateTime? _parseTime(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is DateTime) return raw.toUtc();
+    if (raw is Timestamp) return raw.toDate().toUtc();
+    try {
+      if (raw.runtimeType.toString().contains('Timestamp')) {
+        final dt = (raw as dynamic).toDate();
+        if (dt is DateTime) return dt.toUtc();
+      }
+    } catch (_) {}
+    if (raw is int) {
+      if (raw < 10000000000) return DateTime.fromMillisecondsSinceEpoch(raw * 1000, isUtc: true);
+      return DateTime.fromMillisecondsSinceEpoch(raw, isUtc: true);
+    }
+    if (raw is String) {
+      final parsed = DateTime.tryParse(raw);
+      if (parsed != null) return parsed.toUtc();
+      final asInt = int.tryParse(raw);
+      if (asInt != null) {
+        if (asInt < 10000000000) return DateTime.fromMillisecondsSinceEpoch(asInt * 1000, isUtc: true);
+        return DateTime.fromMillisecondsSinceEpoch(asInt, isUtc: true);
+      }
+    }
+    return null;
+  }
+
   factory ConnectionModel.fromMap(Map<String, dynamic> map, String id) {
     final sender = map['senderId'] ?? '';
     final receiver = map['receiverId'] ?? map['recipientId'] ?? '';
-    final created = map['createdAt'] != null
-        ? DateTime.tryParse(map['createdAt']) ?? DateTime.now()
-        : DateTime.now();
-
-    final lastMsgTime = map['lastMessageTimestamp'] != null
-        ? DateTime.tryParse(map['lastMessageTimestamp'])
-        : null;
+    final created = _parseTime(map['createdAt']) ?? DateTime.now();
+    final updated = _parseTime(map['updatedAt']) ?? created;
+    final lastMsgTime = _parseTime(map['lastMessageTimestamp']);
 
     Map<String, int> unreads = {};
     if (map['unreadCounts'] is Map) {
@@ -153,9 +177,7 @@ class ConnectionModel {
         orElse: () => ConnectionStatus.accepted,
       ),
       createdAt: created,
-      updatedAt: map['updatedAt'] != null
-          ? DateTime.tryParse(map['updatedAt']) ?? created
-          : created,
+      updatedAt: updated,
       participants:
           List<String>.from(map['participants'] ?? [sender, receiver]),
       lastMessageText: map['lastMessageText'] as String?,

@@ -2,9 +2,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/notification_model.dart';
 import '../services/firestore_service.dart';
+import '../services/push_notification_service.dart';
 
 class NotificationProvider extends ChangeNotifier {
-  final FirestoreService _firestoreService = FirestoreService();
+  final FirestoreService _firestoreService;
+
+  NotificationProvider({FirestoreService? firestoreService})
+      : _firestoreService = firestoreService ?? FirestoreService();
+
+  FirestoreService get firestoreService => _firestoreService;
 
   List<NotificationModel> _notifications = [];
   List<NotificationModel> get notifications =>
@@ -12,6 +18,17 @@ class NotificationProvider extends ChangeNotifier {
 
   StreamSubscription<List<NotificationModel>>? _subscription;
   String? _currentUserId;
+  String? _activeConversationConnectionId;
+
+  /// Connection ID currently open in ChatScreen (to suppress redundant alert noise)
+  String? get activeConversationConnectionId => _activeConversationConnectionId;
+  set activeConversationConnectionId(String? connId) {
+    _activeConversationConnectionId = connId;
+    PushNotificationService.activeConversationConnectionId = connId;
+    if (connId != null && _currentUserId != null) {
+      _firestoreService.markMessageNotificationsAsRead(_currentUserId!, connId);
+    }
+  }
 
   void initUserNotifications(String userId) {
     if (_currentUserId == userId && _subscription != null) return;
@@ -21,6 +38,13 @@ class NotificationProvider extends ChangeNotifier {
     _subscription =
         _firestoreService.getNotificationsStream(userId).listen((data) {
       _notifications = data;
+
+      // If user is actively viewing a conversation, automatically mark incoming message notifications as read
+      if (_activeConversationConnectionId != null && _currentUserId != null) {
+        _firestoreService.markMessageNotificationsAsRead(
+            _currentUserId!, _activeConversationConnectionId!);
+      }
+
       notifyListeners();
     });
   }
@@ -36,6 +60,8 @@ class NotificationProvider extends ChangeNotifier {
     _subscription?.cancel();
     _subscription = null;
     _currentUserId = null;
+    _activeConversationConnectionId = null;
+    PushNotificationService.activeConversationConnectionId = null;
     _notifications = [];
     notifyListeners();
   }
@@ -56,5 +82,9 @@ class NotificationProvider extends ChangeNotifier {
 
   void markAllAsRead(String userId) {
     _firestoreService.markAllNotificationsAsRead(userId);
+  }
+
+  void deleteNotification(String userId, String notifId) {
+    _firestoreService.deleteNotification(userId, notifId);
   }
 }

@@ -187,88 +187,123 @@ class HomeFeedScreen extends StatelessWidget {
           );
         }
 
-        return posts.isEmpty
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withOpacity(0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.favorite_border,
-                          size: 48,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        selectedCommunity == 'All'
-                            ? 'No posts in your feed yet'
-                            : 'No posts in "$selectedCommunity"',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: isDark
-                              ? AppColors.darkTextPrimary
-                              : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Be the first to share a post or try changing filters in the top menu!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 14,
-                          height: 1.4,
-                          color: isDark
-                              ? AppColors.darkTextSecondary
-                              : AppColors.lightTextSecondary,
-                        ),
-                      ),
-                      if (selectedCommunity != 'All') ...[
-                        const SizedBox(height: 18),
-                        OutlinedButton(
-                          onPressed: () => postProvider.selectCommunity('All'),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppColors.primary),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20)),
+        return RefreshIndicator(
+          onRefresh: () => postProvider.refreshFeed(),
+          color: AppColors.primary,
+          child: posts.isEmpty
+              ? SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(
+                      parent: BouncingScrollPhysics()),
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(height: 60),
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withOpacity(0.1),
+                            shape: BoxShape.circle,
                           ),
-                          child: const Text('Show All Posts',
-                              style: TextStyle(color: AppColors.primary)),
+                          child: const Icon(
+                            Icons.favorite_border,
+                            size: 48,
+                            color: AppColors.primary,
+                          ),
                         ),
+                        const SizedBox(height: 20),
+                        Text(
+                          selectedCommunity == 'All'
+                              ? 'No posts in your feed yet'
+                              : 'No posts in "$selectedCommunity"',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: isDark
+                                ? AppColors.darkTextPrimary
+                                : AppColors.lightTextPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Be the first to share a post or try changing filters in the top menu!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 14,
+                            height: 1.4,
+                            color: isDark
+                                ? AppColors.darkTextSecondary
+                                : AppColors.lightTextSecondary,
+                          ),
+                        ),
+                        if (selectedCommunity != 'All') ...[
+                          const SizedBox(height: 18),
+                          OutlinedButton(
+                            onPressed: () => postProvider.selectCommunity('All'),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: AppColors.primary),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20)),
+                            ),
+                            child: const Text('Show All Posts',
+                                style: TextStyle(color: AppColors.primary)),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
+                  ),
+                )
+              : NotificationListener<ScrollNotification>(
+                  onNotification: (scrollInfo) {
+                    if (scrollInfo.metrics.pixels >=
+                            scrollInfo.metrics.maxScrollExtent - 200 &&
+                        !postProvider.isLoadingOlder &&
+                        postProvider.hasMoreOlder) {
+                      postProvider.loadOlderPosts();
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    itemCount:
+                        posts.length + (postProvider.isLoadingOlder ? 1 : 0),
+                    physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics()),
+                    padding: const EdgeInsets.only(
+                        top: 12, bottom: 90, left: 16, right: 16),
+                    itemBuilder: (ctx, index) {
+                      if (index == posts.length) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      final post = posts[index];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: PostCard(
+                          post: post,
+                          onTapUser: () {
+                            if (onTapUser != null) {
+                              onTapUser!(post.userId);
+                            }
+                          },
+                        ),
+                      );
+                    },
                   ),
                 ),
-              )
-            : ListView.builder(
-                itemCount: posts.length,
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.only(
-                    top: 12, bottom: 90, left: 16, right: 16),
-                itemBuilder: (ctx, index) {
-                  final post = posts[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: PostCard(
-                      post: post,
-                      onTapUser: () {
-                        if (onTapUser != null) {
-                          onTapUser!(post.userId);
-                        }
-                      },
-                    ),
-                  );
-                },
-              );
+        );
       },
     );
   }

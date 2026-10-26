@@ -114,6 +114,9 @@ class _PostCardState extends State<PostCard> {
         widget.post.crushedUserIds.contains(currentUser.id);
     final isSelf = currentUser != null && currentUser.id == widget.post.userId;
     final isFollowing = userProvider.isFollowing(widget.post.userId);
+    final isPending = currentUser != null &&
+        userProvider.isFollowPending(widget.post.userId,
+            currentUserId: currentUser.id);
 
     final isMascotAvatar =
         widget.post.userProfilePic.startsWith('crushie_avatar_');
@@ -298,32 +301,56 @@ class _PostCardState extends State<PostCard> {
                 if (!isSelf && currentUser != null) ...[
                   if (!isFollowing)
                     OutlinedButton(
-                      onPressed: () {
-                        userProvider.toggleFollow(
-                          currentUser.id,
-                          widget.post.userId,
-                          targetUsername: widget.post.username,
-                        );
-                      },
+                      onPressed: isPending
+                          ? null
+                          : () async {
+                              try {
+                                await userProvider.toggleFollow(
+                                  currentUser.id,
+                                  widget.post.userId,
+                                  targetUsername: widget.post.username,
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Failed to follow: $e'),
+                                      backgroundColor: Colors.redAccent,
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 4),
                         minimumSize: const Size(60, 30),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
-                        side: const BorderSide(
-                          color: AppColors.primary,
+                        side: BorderSide(
+                          color: isPending ? Colors.grey : AppColors.primary,
                           width: 1.2,
                         ),
                       ),
-                      child: const Text(
-                        '+ Follow',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
-                        ),
-                      ),
+                      child: isPending
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    AppColors.primary),
+                              ),
+                            )
+                          : const Text(
+                              '+ Follow',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primary,
+                              ),
+                            ),
                     ),
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.more_vert, size: 20),
@@ -354,7 +381,7 @@ class _PostCardState extends State<PostCard> {
                       ),
                     ],
                   ),
-                ] else if (isSelf && currentUser != null) ...[
+                ] else if (isSelf) ...[
                   ElevatedButton.icon(
                     onPressed: () =>
                         BoostPostModal.show(context, widget.post, currentUser),

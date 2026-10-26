@@ -3,10 +3,18 @@
 enum NotificationType {
   crush,              // Someone Crushed your post
   crushComment,       // Someone commented (Crushed) on your post
+  commentReply,       // Someone replied to your comment
   follow,             // Someone followed you
   connectionRequest,  // Someone requested to Connect
   connectionAccepted, // Someone accepted your Connection
   connectionDeclined, // Someone declined your Connection
+  message,            // Incoming direct chat message
+  mention,            // Mentioned in post or comment
+  locationPost,       // New post in subscribed location (e.g. Juja)
+  premium,            // Premium status update / payment
+  verification,       // Verification approved or declined
+  account,            // Important account / security event
+  boost,              // Post boost activation or expiration
   system,             // System/Support notification
 }
 
@@ -20,6 +28,7 @@ class NotificationModel {
   final String title;
   final String body;
   final String? postId;
+  final String? commentId;
   final String? connectionId;
   final bool isRead;
   final DateTime createdAt;
@@ -34,6 +43,7 @@ class NotificationModel {
     required this.title,
     required this.body,
     this.postId,
+    this.commentId,
     this.connectionId,
     this.isRead = false,
     DateTime? createdAt,
@@ -50,6 +60,7 @@ class NotificationModel {
       'title': title,
       'body': body,
       'postId': postId,
+      'commentId': commentId,
       'connectionId': connectionId,
       'isRead': isRead,
       'createdAt': createdAt.toIso8601String(),
@@ -70,6 +81,7 @@ class NotificationModel {
       title: map['title'] ?? '',
       body: map['body'] ?? '',
       postId: map['postId'],
+      commentId: map['commentId'],
       connectionId: map['connectionId'],
       isRead: map['isRead'] ?? false,
       createdAt: map['createdAt'] != null
@@ -80,6 +92,7 @@ class NotificationModel {
 
   NotificationModel copyWith({
     bool? isRead,
+    String? commentId,
   }) {
     return NotificationModel(
       id: id,
@@ -91,6 +104,7 @@ class NotificationModel {
       title: title,
       body: body,
       postId: postId,
+      commentId: commentId ?? this.commentId,
       connectionId: connectionId,
       isRead: isRead ?? this.isRead,
       createdAt: createdAt,

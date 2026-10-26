@@ -180,6 +180,44 @@ class SettingsScreen extends StatelessWidget {
 
           const SizedBox(height: 16),
 
+          // Notifications & Preferences Section Header
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Text(
+              'NOTIFICATIONS & ALERTS',
+              style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                  letterSpacing: 0.8),
+            ),
+          ),
+
+          if (user != null)
+            SwitchListTile(
+              secondary: const Icon(Icons.location_on_outlined,
+                  color: Colors.deepOrange),
+              title: const Text('Juja Local Post Alerts'),
+              subtitle: const Text(
+                  'Receive opt-in notifications for new posts in Juja'),
+              value: user.locationNotificationSubscriptions.contains('Juja'),
+              activeColor: AppColors.primary,
+              onChanged: (enabled) async {
+                final currentList =
+                    List<String>.from(user.locationNotificationSubscriptions);
+                if (enabled) {
+                  if (!currentList.contains('Juja')) currentList.add('Juja');
+                } else {
+                  currentList.remove('Juja');
+                }
+                final updated = user.copyWith(
+                    locationNotificationSubscriptions: currentList);
+                await authProv.updateUserProfile(updated);
+              },
+            ),
+
+          const SizedBox(height: 16),
+
           // About & Legal Header
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -462,6 +500,7 @@ class SettingsScreen extends StatelessWidget {
   // Delete Account Confirmation Dialog
   void _showDeleteAccountDialog(BuildContext context, AuthProvider authProv) {
     final user = authProv.currentUser;
+    final effectiveUid = user?.id ?? authProv.firebaseUser?.uid;
     final passwordController = TextEditingController();
     bool isLoading = false;
 
@@ -509,7 +548,7 @@ class SettingsScreen extends StatelessWidget {
                 onPressed: isLoading
                     ? null
                     : () async {
-                        if (user == null) {
+                        if (effectiveUid == null || effectiveUid.trim().isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                                 content:
@@ -530,7 +569,7 @@ class SettingsScreen extends StatelessWidget {
 
                         setModalState(() => isLoading = true);
                         final success = await authProv.deleteAccount(
-                          user.id,
+                          effectiveUid,
                           currentPassword: passwordController.text,
                         );
                         setModalState(() => isLoading = false);

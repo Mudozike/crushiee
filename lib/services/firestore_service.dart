@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
@@ -19,6 +20,22 @@ class PaginatedPostsResult {
   });
 }
 
+class FeedSnapshotResult {
+  final List<PostModel> posts;
+  final DocumentSnapshot? lastDocument;
+
+  FeedSnapshotResult({
+    required this.posts,
+    this.lastDocument,
+  });
+}
+
+class _InFlightFollowOp {
+  final bool isFollow;
+  final Future<bool> future;
+  _InFlightFollowOp(this.isFollow, this.future);
+}
+
 class FirestoreService {
   static final FirestoreService _instance = FirestoreService._internal();
   factory FirestoreService([FirebaseFirestore? firestore]) {
@@ -29,6 +46,7 @@ class FirestoreService {
   }
   FirestoreService._internal() : _customFirestore = null;
   FirestoreService._withFirestore(this._customFirestore);
+  FirestoreService.forTesting([this._customFirestore]);
 
   final FirebaseFirestore? _customFirestore;
   FirebaseFirestore get _firestore =>
@@ -70,7 +88,7 @@ class FirestoreService {
           'followingCount': 0,
           'communities': user.communities,
           'isOnline': user.isOnline,
-          'lastSeen': user.lastSeen.toIso8601String(),
+          'lastSeen': user.lastSeen?.toIso8601String(),
           'createdAt': user.createdAt.toIso8601String(),
           'updatedAt': DateTime.now().toIso8601String(),
         };
@@ -110,7 +128,7 @@ class FirestoreService {
           'profileCompleted': true,
           'communities': user.communities,
           'isOnline': user.isOnline,
-          'lastSeen': user.lastSeen.toIso8601String(),
+          'lastSeen': user.lastSeen?.toIso8601String(),
           'updatedAt': DateTime.now().toIso8601String(),
         };
 
@@ -187,10 +205,141 @@ class FirestoreService {
 
   /// Stream of a user's profile document
   Stream<UserModel?> getUserProfileStream(String userId) {
-    return _firestore.collection('users').doc(userId).snapshots().map((doc) {
-      if (!doc.exists || doc.data() == null) return null;
-      return UserModel.fromMap(doc.data()!, doc.id);
-    });
+    if (userId.trim().isEmpty) return Stream.value(null);
+    try {
+      return _firestore.collection('users').doc(userId).snapshots().map((doc) {
+        if (!doc.exists || doc.data() == null) return null;
+        try {
+          return UserModel.fromMap(doc.data()!, doc.id);
+        } catch (e) {
+          debugPrint('[FIRESTORE] Error parsing user profile $userId in stream: $e');
+          return null;
+        }
+      }).handleError((e) {
+        debugPrint('[FIRESTORE] Error in getUserProfileStream for $userId: $e');
+        return null;
+      });
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error initializing getUserProfileStream for $userId: $e');
+      return Stream.value(null);
+    }
+  }
+
+  /// Convenience alias for getUserProfileStream
+  Stream<UserModel?> getUserStream(String userId) => getUserProfileStream(userId);
+
+  static String? _clientDeviceId;
+
+  /// Unique client session identifier for this device
+  static String get clientDeviceId {
+    _clientDeviceId ??=
+        'dev_${DateTime.now().millisecondsSinceEpoch}_${(1000 + (DateTime.now().microsecond % 9000))}';
+    return _clientDeviceId!;
+  }
+
+  /// Override client device ID (useful for multi-device simulation in tests)
+  @visibleForTesting
+  static void setClientDeviceIdForTesting(String? id) {
+    _clientDeviceId = id;
+  }
+
+  /// Update online presence and lastSeen for user with multi-device session support.
+  /// If one device disconnects, the user remains online if another active device session exists.
+  Future<void> updateUserPresence(
+    String userId, {
+    required bool isOnline,
+    String? deviceId,
+  }) async {
+    if (userId.trim().isEmpty) return;
+    final devId = deviceId ?? clientDeviceId;
+    final now = DateTime.now();
+    final userRef = _firestore.collection('users').doc(userId);
+
+    try {
+      await _firestore.runTransaction((transaction) async {
+        final snapshot = await transaction.get(userRef);
+        if (!snapshot.exists) {
+          final initialSessions =
+              isOnline ? <String, dynamic>{devId: now.toIso8601String()} : <String, dynamic>{};
+          transaction.set(
+            userRef,
+            {
+              'isOnline': isOnline,
+              'lastSeen': now.toIso8601String(),
+              'updatedAt': now.toIso8601String(),
+              'activeSessions': initialSessions,
+            },
+            SetOptions(merge: true),
+          );
+          return;
+        }
+
+        final data = snapshot.data() ?? <String, dynamic>{};
+        final rawSessions = data['activeSessions'];
+        final Map<String, dynamic> activeSessions =
+            rawSessions is Map ? Map<String, dynamic>.from(rawSessions) : {};
+
+        // Prune stale sessions (> 4 minutes without heartbeat)
+        activeSessions.removeWhere((key, val) {
+          if (key == devId) return false;
+          if (val == null) return true;
+          final dt = DateTime.tryParse(val.toString());
+          if (dt == null) return true;
+          return now.difference(dt).inMinutes >= 4;
+        });
+
+        bool effectiveOnline;
+        if (isOnline) {
+          activeSessions[devId] = now.toIso8601String();
+          effectiveOnline = true;
+        } else {
+          activeSessions.remove(devId);
+          effectiveOnline = activeSessions.isNotEmpty;
+        }
+
+        final updateData = <String, dynamic>{
+          'isOnline': effectiveOnline,
+          'lastSeen': now.toIso8601String(),
+          'updatedAt': now.toIso8601String(),
+          'activeSessions': activeSessions,
+        };
+
+        if (!effectiveOnline) {
+          updateData['typingInConnectionId'] = null;
+          updateData['typingUpdatedAt'] = null;
+        }
+
+        transaction.update(userRef, updateData);
+      });
+      debugPrint(
+          '[FIRESTORE] Presence updated for $userId (device: $devId): isOnline=$isOnline');
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error updating presence transaction for $userId: $e');
+      try {
+        await userRef.set({
+          'isOnline': isOnline,
+          'lastSeen': now.toIso8601String(),
+          'updatedAt': now.toIso8601String(),
+        }, SetOptions(merge: true));
+      } catch (fallbackErr) {
+        debugPrint('[FIRESTORE] Fallback presence update failed: $fallbackErr');
+      }
+    }
+  }
+
+  /// Update typing indicator for user in a connection
+  Future<void> setUserTyping(String userId, String? connectionId) async {
+    if (userId.trim().isEmpty) return;
+    try {
+      final now = DateTime.now();
+      await _firestore.collection('users').doc(userId).set({
+        'typingInConnectionId': connectionId,
+        'typingUpdatedAt': connectionId != null ? now.toIso8601String() : null,
+      }, SetOptions(merge: true));
+      debugPrint('[FIRESTORE] Typing updated for $userId in $connectionId');
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error updating typing for $userId: $e');
+    }
   }
 
   // --- POSTS & CURSOR-BASED PAGINATION ---
@@ -240,11 +389,101 @@ class FirestoreService {
     return PaginatedPostsResult(posts: posts, lastDocument: newLastDoc);
   }
 
+  /// Stream real-time feed updates with cursor tracking
+  Stream<FeedSnapshotResult> getFeedSnapshotStream({
+    String? community,
+    int limit = 20,
+  }) {
+    try {
+      Query query = _firestore.collection('posts');
+
+      // Filter active and non-expired posts
+      query = query
+          .where('isActive', isEqualTo: true)
+          .where('expiresAt', isGreaterThan: DateTime.now().toIso8601String());
+
+      if (community != null && community.isNotEmpty && community != 'All') {
+        query = query.where('community', isEqualTo: community);
+      }
+
+      query = query
+          .orderBy('expiresAt')
+          .orderBy('createdAt', descending: true)
+          .limit(limit);
+
+      return query.snapshots().map((snapshot) {
+        final posts = snapshot.docs
+            .map((doc) =>
+                PostModel.fromMap(doc.data() as Map<String, dynamic>, doc.id))
+            .where((p) => !p.isExpired)
+            .toList();
+
+        posts.sort((a, b) {
+          if (a.currentlyBoosted && !b.currentlyBoosted) return -1;
+          if (!a.currentlyBoosted && b.currentlyBoosted) return 1;
+          return b.createdAt.compareTo(a.createdAt);
+        });
+
+        final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+        return FeedSnapshotResult(posts: posts, lastDocument: lastDoc);
+      });
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error getting feed snapshot stream: $e');
+      return Stream.error(e);
+    }
+  }
+
+  /// Convenience stream for real-time posts list
+  Stream<List<PostModel>> getFeedPostsStream({
+    String? community,
+    int limit = 20,
+  }) {
+    return getFeedSnapshotStream(community: community, limit: limit)
+        .map((r) => r.posts);
+  }
+
+  /// Real-time stream for an individual post document
+  Stream<PostModel?> getPostStream(String postId) {
+    try {
+      return _firestore
+          .collection('posts')
+          .doc(postId)
+          .snapshots()
+          .map((doc) {
+        if (!doc.exists || doc.data() == null) return null;
+        return PostModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+      });
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error getting post stream for $postId: $e');
+      return Stream.error(e);
+    }
+  }
+
+  /// Fetch a single post document one-time
+  Future<PostModel?> getPost(String postId) async {
+    try {
+      final doc = await _firestore.collection('posts').doc(postId).get();
+      if (!doc.exists || doc.data() == null) return null;
+      return PostModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error getting post $postId: $e');
+      return null;
+    }
+  }
+
   /// Create new post in posts/{postId}
   Future<bool> createPost(PostModel post) async {
     try {
       await _firestore.collection('posts').doc(post.id).set(post.toMap());
       debugPrint('[FIRESTORE] Post created with ID: ${post.id}');
+
+      // Opt-in location notification trigger (e.g. Juja)
+      if (post.location.trim().isNotEmpty) {
+        notifyLocationSubscribers(post).catchError((e) {
+          debugPrint('[FIRESTORE] Location notification error: $e');
+        });
+      }
+
       return true;
     } catch (e) {
       debugPrint('[FIRESTORE] Error creating post: $e');
@@ -323,7 +562,7 @@ class FirestoreService {
         // Notify post author (if not self and postAuthorId is provided)
         if (postAuthorId != null && postAuthorId != userId) {
           final notif = NotificationModel(
-            id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+            id: 'notif_crush_${postId}_$userId',
             userId: postAuthorId,
             fromUserId: userId,
             fromUsername: username ?? 'Someone',
@@ -367,7 +606,7 @@ class FirestoreService {
       // Notify post author (if not self)
       if (postAuthorId != null && postAuthorId != comment.userId) {
         final notif = NotificationModel(
-          id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+          id: 'notif_comment_${comment.id}',
           userId: postAuthorId,
           fromUserId: comment.userId,
           fromUsername: comment.username,
@@ -376,6 +615,7 @@ class FirestoreService {
           title: 'New Comment!',
           body: '${comment.username} commented on your post',
           postId: comment.postId,
+          commentId: comment.id,
         );
         createNotification(notif);
       }
@@ -459,8 +699,89 @@ class FirestoreService {
     String? currentUserProfilePic,
     String? targetUsername,
   }) async {
-    if (currentUserId == targetUserId) return false;
+    if (currentUserId.isEmpty ||
+        targetUserId.isEmpty ||
+        currentUserId == targetUserId) {
+      return false;
+    }
 
+    final followRef = _firestore
+        .collection('users')
+        .doc(currentUserId)
+        .collection('follows')
+        .doc(targetUserId);
+
+    final doc = await followRef.get();
+    if (doc.exists) {
+      return unfollowUser(
+        currentUserId: currentUserId,
+        targetUserId: targetUserId,
+      );
+    } else {
+      return followUser(
+        currentUserId: currentUserId,
+        targetUserId: targetUserId,
+        currentUsername: currentUsername,
+        currentUserProfilePic: currentUserProfilePic,
+        targetUsername: targetUsername,
+      );
+    }
+  }
+
+  final Map<String, _InFlightFollowOp> _inFlightFollowOps = {};
+
+  /// Idempotently follow a target user. If already followed, does nothing.
+  /// Concurrency-guarded to prevent concurrent duplicate writes from triggering permission errors.
+  Future<bool> followUser({
+    required String currentUserId,
+    required String targetUserId,
+    String? currentUsername,
+    String? currentUserProfilePic,
+    String? targetUsername,
+  }) async {
+    if (currentUserId.isEmpty ||
+        targetUserId.isEmpty ||
+        currentUserId == targetUserId) {
+      return false;
+    }
+
+    final opKey = '$currentUserId:$targetUserId';
+    final existing = _inFlightFollowOps[opKey];
+    if (existing != null) {
+      if (existing.isFollow) {
+        return existing.future;
+      }
+      try {
+        await existing.future;
+      } catch (_) {}
+    }
+
+    late final Future<bool> opFuture;
+    opFuture = _executeFollowUser(
+      currentUserId: currentUserId,
+      targetUserId: targetUserId,
+      currentUsername: currentUsername,
+      currentUserProfilePic: currentUserProfilePic,
+      targetUsername: targetUsername,
+    );
+
+    _inFlightFollowOps[opKey] = _InFlightFollowOp(true, opFuture);
+    try {
+      return await opFuture;
+    } finally {
+      if (identical(_inFlightFollowOps[opKey]?.future, opFuture)) {
+        _inFlightFollowOps.remove(opKey);
+      }
+    }
+  }
+
+  Future<bool> _executeFollowUser({
+    required String currentUserId,
+    required String targetUserId,
+    String? currentUsername,
+    String? currentUserProfilePic,
+    String? targetUsername,
+  }) async {
     try {
       final followRef = _firestore
           .collection('users')
@@ -468,75 +789,133 @@ class FirestoreService {
           .collection('follows')
           .doc(targetUserId);
 
-      final currentUserRef = _firestore.collection('users').doc(currentUserId);
-      final targetUserRef = _firestore.collection('users').doc(targetUserId);
+      final doc = await followRef.get();
+      if (doc.exists) {
+        return true; // Already following, idempotent no-op
+      }
+
+      await followRef.set({
+        'targetId': targetUserId,
+        'targetUsername': targetUsername ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      debugPrint('[FIRESTORE] Followed: $targetUserId by $currentUserId');
+
+      // Notification for target user
+      final notif = NotificationModel(
+        id: 'notif_follow_${currentUserId}_$targetUserId',
+        userId: targetUserId,
+        fromUserId: currentUserId,
+        fromUsername: currentUsername ?? 'Someone',
+        fromUserProfilePic: currentUserProfilePic ?? 'crushie_avatar_0',
+        type: NotificationType.follow,
+        title: 'New Follower!',
+        body: '${currentUsername ?? "Someone"} followed you',
+      );
+      createNotification(notif).catchError((_) {});
+      return true;
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error in followUser: $e');
+      rethrow;
+    }
+  }
+
+  /// Idempotently unfollow a target user. If relationship is absent, does nothing.
+  /// Concurrency-guarded to prevent race conditions during rapid toggles.
+  Future<bool> unfollowUser({
+    required String currentUserId,
+    required String targetUserId,
+  }) async {
+    if (currentUserId.isEmpty ||
+        targetUserId.isEmpty ||
+        currentUserId == targetUserId) {
+      return false;
+    }
+
+    final opKey = '$currentUserId:$targetUserId';
+    final existing = _inFlightFollowOps[opKey];
+    if (existing != null) {
+      if (!existing.isFollow) {
+        return existing.future;
+      }
+      try {
+        await existing.future;
+      } catch (_) {}
+    }
+
+    late final Future<bool> opFuture;
+    opFuture = _executeUnfollowUser(
+      currentUserId: currentUserId,
+      targetUserId: targetUserId,
+    );
+
+    _inFlightFollowOps[opKey] = _InFlightFollowOp(false, opFuture);
+    try {
+      return await opFuture;
+    } finally {
+      if (identical(_inFlightFollowOps[opKey]?.future, opFuture)) {
+        _inFlightFollowOps.remove(opKey);
+      }
+    }
+  }
+
+  Future<bool> _executeUnfollowUser({
+    required String currentUserId,
+    required String targetUserId,
+  }) async {
+    try {
+      final followRef = _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .collection('follows')
+          .doc(targetUserId);
 
       final doc = await followRef.get();
-      final targetDoc = await targetUserRef.get();
-      final currentUserDoc = await currentUserRef.get();
-
-      final hasFollowersCounter = targetDoc.exists &&
-          targetDoc.data() != null &&
-          targetDoc.data()!.containsKey('followersCount');
-      final hasFollowingCounter = currentUserDoc.exists &&
-          currentUserDoc.data() != null &&
-          currentUserDoc.data()!.containsKey('followingCount');
-
-      if (doc.exists) {
-        // Unfollow
-        final batch = _firestore.batch();
-        batch.delete(followRef);
-        if (hasFollowingCounter &&
-            ((currentUserDoc.data()!['followingCount'] as num?) ?? 0) > 0) {
-          batch.update(
-              currentUserRef, {'followingCount': FieldValue.increment(-1)});
-        }
-        if (hasFollowersCounter &&
-            ((targetDoc.data()!['followersCount'] as num?) ?? 0) > 0) {
-          batch.update(
-              targetUserRef, {'followersCount': FieldValue.increment(-1)});
-        }
-        await batch.commit();
-        debugPrint('[FIRESTORE] Unfollowed: $targetUserId by $currentUserId');
-        return false;
-      } else {
-        // Follow
-        final batch = _firestore.batch();
-        batch.set(followRef, {
-          'targetId': targetUserId,
-          'targetUsername': targetUsername ?? '',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        if (hasFollowingCounter) {
-          batch.update(
-              currentUserRef, {'followingCount': FieldValue.increment(1)});
-        } else if (currentUserDoc.exists) {
-          batch.update(currentUserRef, {'followingCount': 1});
-        }
-        if (hasFollowersCounter) {
-          batch.update(
-              targetUserRef, {'followersCount': FieldValue.increment(1)});
-        }
-        await batch.commit();
-        debugPrint('[FIRESTORE] Followed: $targetUserId by $currentUserId');
-
-        // Notification for target user
-        final notif = NotificationModel(
-          id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
-          userId: targetUserId,
-          fromUserId: currentUserId,
-          fromUsername: currentUsername ?? 'Someone',
-          fromUserProfilePic: currentUserProfilePic ?? 'crushie_avatar_0',
-          type: NotificationType.follow,
-          title: 'New Follower!',
-          body: '${currentUsername ?? "Someone"} followed you',
-        );
-        createNotification(notif);
-        return true;
+      if (!doc.exists) {
+        return false; // Absent relationship, idempotent no-op
       }
+
+      await followRef.delete();
+      debugPrint('[FIRESTORE] Unfollowed: $targetUserId by $currentUserId');
+      return false;
     } catch (e) {
-      debugPrint('[FIRESTORE] Error toggling follow: $e');
+      debugPrint('[FIRESTORE] Error in unfollowUser: $e');
       rethrow;
+    }
+  }
+
+  /// Returns the derived number of followers for a user using a Firestore count aggregation.
+  /// Returns null if the aggregation query fails (e.g. network/offline error).
+  Future<int?> getFollowersCount(String userId) async {
+    if (userId.isEmpty) return 0;
+    try {
+      final aggregateQuery = _firestore
+          .collectionGroup('follows')
+          .where('targetId', isEqualTo: userId)
+          .count();
+      final snapshot = await aggregateQuery.get();
+      return snapshot.count ?? 0;
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error fetching followers count for $userId: $e');
+      return null;
+    }
+  }
+
+  /// Returns the derived number of users followed by userId using a Firestore count aggregation.
+  /// Returns null if the aggregation query fails (e.g. network/offline error).
+  Future<int?> getFollowingCount(String userId) async {
+    if (userId.isEmpty) return 0;
+    try {
+      final aggregateQuery = _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('follows')
+          .count();
+      final snapshot = await aggregateQuery.get();
+      return snapshot.count ?? 0;
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error fetching following count for $userId: $e');
+      return null;
     }
   }
 
@@ -555,16 +934,34 @@ class FirestoreService {
   // --- NOTIFICATIONS API ---
 
   /// Create notification document in users/{userId}/notifications/{notificationId}
+  /// Validates recipient, prevents self-notifications for social interactions,
+  /// and merges deterministically to prevent duplicate entries.
   Future<void> createNotification(NotificationModel notification) async {
     try {
+      if (notification.userId.isEmpty) return;
+
+      // Prevent self-notifications for social interactions
+      final isSelf = notification.userId == notification.fromUserId;
+      final isAccountOrSystemEvent = notification.type == NotificationType.system ||
+          notification.type == NotificationType.premium ||
+          notification.type == NotificationType.verification ||
+          notification.type == NotificationType.account ||
+          notification.type == NotificationType.boost;
+
+      if (isSelf && !isAccountOrSystemEvent) {
+        debugPrint(
+            '[FIRESTORE] Suppressed self-notification for actor: ${notification.fromUserId}');
+        return;
+      }
+
       await _firestore
           .collection('users')
           .doc(notification.userId)
           .collection('notifications')
           .doc(notification.id)
-          .set(notification.toMap());
+          .set(notification.toMap(), SetOptions(merge: true));
       debugPrint(
-          '[FIRESTORE] Notification created for UID: ${notification.userId}');
+          '[FIRESTORE] Notification created for UID: ${notification.userId} (type: ${notification.type.name}, id: ${notification.id})');
     } catch (e) {
       debugPrint('[FIRESTORE] Error creating notification: $e');
     }
@@ -620,6 +1017,107 @@ class FirestoreService {
     }
   }
 
+  /// Delete a single notification
+  Future<void> deleteNotification(String userId, String notificationId) async {
+    try {
+      await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('notifications')
+          .doc(notificationId)
+          .delete();
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error deleting notification $notificationId: $e');
+    }
+  }
+
+  /// Automatically mark message notifications as read when connection conversation is opened
+  Future<void> markMessageNotificationsAsRead(
+      String userId, String connectionId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('notifications')
+          .where('connectionId', isEqualTo: connectionId)
+          .where('type', isEqualTo: NotificationType.message.name)
+          .where('isRead', isEqualTo: false)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final batch = _firestore.batch();
+        for (final doc in snapshot.docs) {
+          batch.update(doc.reference, {'isRead': true});
+        }
+        await batch.commit();
+      }
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error marking message notifications as read: $e');
+    }
+  }
+
+  /// Notify users who have explicitly opted into notifications for the post's location.
+  Future<void> notifyLocationSubscribers(PostModel post) async {
+    if (post.location.trim().isEmpty) return;
+    final normalizedLoc = post.location.trim();
+
+    try {
+      final snapshot = await _firestore
+          .collection('users')
+          .where('locationNotificationSubscriptions', arrayContains: normalizedLoc)
+          .get();
+
+      for (final doc in snapshot.docs) {
+        final subscriberId = doc.id;
+        // Suppress notifying author
+        if (subscriberId == post.userId) continue;
+
+        final notif = NotificationModel(
+          id: 'notif_loc_${post.id}_$subscriberId',
+          userId: subscriberId,
+          fromUserId: post.userId,
+          fromUsername: post.username,
+          fromUserProfilePic: post.userProfilePic,
+          type: NotificationType.locationPost,
+          title: 'New Post in $normalizedLoc',
+          body: post.description.isNotEmpty
+              ? (post.description.length > 80
+                  ? '${post.description.substring(0, 80)}...'
+                  : post.description)
+              : '@${post.username} shared a new post in $normalizedLoc',
+          postId: post.id,
+        );
+        await createNotification(notif);
+      }
+    } catch (e) {
+      debugPrint(
+          '[FIRESTORE] Error notifying location subscribers for $normalizedLoc: $e');
+    }
+  }
+
+  /// Authenticated direct message reply handler
+  /// Reuses existing sendChatMessage transaction and messaging security
+  Future<void> sendNotificationReply({
+    required String connectionId,
+    required String recipientId,
+    required String senderId,
+    required String senderUsername,
+    required String senderProfilePic,
+    required String content,
+  }) async {
+    if (content.trim().isEmpty) return;
+    final replyMsg = ChatMessageModel(
+      id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
+      connectionId: connectionId,
+      senderId: senderId,
+      receiverId: recipientId,
+      content: content.trim(),
+      createdAt: DateTime.now(),
+      deliveryStatus: MessageDeliveryStatus.sent,
+    );
+    await sendChatMessage(replyMsg);
+  }
+
   // --- CONNECTIONS & MESSAGES ---
 
   /// Get connection by ID from connections/{connectionId}
@@ -637,7 +1135,18 @@ class FirestoreService {
     }
   }
 
-  /// Finds existing connection between two users (checks canonical ID first, then legacy IDs)
+  /// Finds existing connection between two users.
+  ///
+  /// Resolution order:
+  ///   1. Canonical document ID  `conn_{sorted[0]}_{sorted[1]}`
+  ///   2. Query by `participants` array containing uid1 (may miss legacy docs)
+  ///   3. Legacy fallback: query by senderId/receiverId fields in both
+  ///      orientations so documents that pre-date the `participants` field are
+  ///      found.
+  ///
+  /// When step 3 returns multiple candidate documents the most recently
+  /// updated one is returned and the ambiguity is logged as a diagnosable
+  /// warning — documents are NOT merged or rewritten.
   Future<ConnectionModel?> findExistingConnection(
       String uid1, String uid2) async {
     try {
@@ -653,7 +1162,7 @@ class FirestoreService {
       if (canonicalDoc.exists && canonicalDoc.data() != null) {
         return ConnectionModel.fromMap(canonicalDoc.data()!, canonicalDoc.id);
       }
-      // 2. Check for legacy connection where participants contain both uids
+      // 2. Check for connections where participants array contains uid1
       final snapshot = await _firestore
           .collection('connections')
           .where('participants', arrayContains: uid1)
@@ -665,12 +1174,69 @@ class FirestoreService {
           return ConnectionModel.fromMap(data, doc.id);
         }
       }
-      return null;
+      // 3. Legacy fallback: documents that lack the `participants` field but
+      //    carry senderId + receiverId/recipientId in direct and reverse order.
+      //    Bounded by sender match so we do not download the full collection.
+      final List<ConnectionModel> candidates = [];
+      for (final pair in [
+        [uid1, uid2],
+        [uid2, uid1],
+      ]) {
+        final sender = pair[0];
+        final receiver = pair[1];
+        // 3a. senderId + receiverId
+        try {
+          final byReceiverId = await _firestore
+              .collection('connections')
+              .where('senderId', isEqualTo: sender)
+              .where('receiverId', isEqualTo: receiver)
+              .get();
+          for (final doc in byReceiverId.docs) {
+            candidates.add(ConnectionModel.fromMap(doc.data(), doc.id));
+          }
+        } catch (e) {
+          debugPrint('[FIRESTORE] Legacy lookup (receiverId) error: $e');
+        }
+        // 3b. senderId + recipientId (alternate field name)
+        try {
+          final byRecipientId = await _firestore
+              .collection('connections')
+              .where('senderId', isEqualTo: sender)
+              .where('recipientId', isEqualTo: receiver)
+              .get();
+          for (final doc in byRecipientId.docs) {
+            if (!candidates.any((c) => c.id == doc.id)) {
+              candidates.add(ConnectionModel.fromMap(doc.data(), doc.id));
+            }
+          }
+        } catch (e) {
+          debugPrint('[FIRESTORE] Legacy lookup (recipientId) error: $e');
+        }
+      }
+
+      if (candidates.isEmpty) return null;
+
+      if (candidates.length > 1) {
+        // Multiple legacy documents for the same participant pair.
+        // Return the most recently updated one; do NOT merge or rewrite.
+        debugPrint(
+            '[FIRESTORE] WARNING: ${candidates.length} candidate connections found '
+            'for participants $uid1 / $uid2. IDs: '
+            '${candidates.map((c) => c.id).join(', ')}. '
+            'Using most recently updated. Manual investigation recommended.');
+        candidates.sort((a, b) {
+          final tA = a.lastMessageTimestamp ?? a.updatedAt;
+          final tB = b.lastMessageTimestamp ?? b.updatedAt;
+          return tB.compareTo(tA);
+        });
+      }
+      return candidates.first;
     } catch (e) {
       debugPrint('[FIRESTORE] Error finding existing connection: $e');
       return null;
     }
   }
+
 
   /// Save or update a connection document in connections/{connectionId}
   Future<void> saveConnection(ConnectionModel connection) async {
@@ -717,7 +1283,9 @@ class FirestoreService {
       list.sort((a, b) {
         final timeA = a.lastMessageTimestamp ?? a.updatedAt;
         final timeB = b.lastMessageTimestamp ?? b.updatedAt;
-        return timeB.compareTo(timeA);
+        final cmp = timeB.compareTo(timeA);
+        if (cmp != 0) return cmp;
+        return b.id.compareTo(a.id);
       });
       return list;
     });
@@ -730,17 +1298,157 @@ class FirestoreService {
         .collection('connections')
         .doc(connectionId)
         .collection('messages')
-        .orderBy('timestamp', descending: false)
+        .orderBy('timestamp', descending: true)
         .limit(limit)
         .snapshots()
+        .transform(StreamTransformer<QuerySnapshot<Map<String, dynamic>>,
+            QuerySnapshot<Map<String, dynamic>>>.fromHandlers(
+          handleData: (snapshot, sink) {
+            sink.add(snapshot);
+          },
+          handleError: (error, stackTrace, sink) {
+            debugPrint(
+                '[FIRESTORE] getMessagesStream error for connection $connectionId: $error\n$stackTrace');
+            sink.addError(error, stackTrace);
+          },
+        ))
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => ChatMessageModel.fromMap(doc.data(), doc.id))
-          .toList();
-    });
+          final List<ChatMessageModel> messages = [];
+          for (final doc in snapshot.docs) {
+            try {
+              final data = doc.data();
+              messages.add(ChatMessageModel.fromMap(data, doc.id,
+                  connectionIdFallback: connectionId));
+            } catch (e) {
+              debugPrint('[FIRESTORE] Error parsing message doc ${doc.id}: $e');
+            }
+          }
+          // Sort chronologically ascending for display with stable tie-breaker
+          messages.sort((a, b) {
+            final cmp = a.timestamp.compareTo(b.timestamp);
+            if (cmp != 0) return cmp;
+            return a.id.compareTo(b.id);
+          });
+          return messages;
+        });
   }
 
+  /// Fetches a bounded page of older messages before [oldestMessage] using deterministic cursor pagination.
+  /// Strictly requires a valid Firestore DocumentSnapshot cursor with the ordered 'timestamp' field.
+  /// Does not attempt unsafe single-value fallbacks that skip or duplicate records on equal timestamps.
+  Future<List<ChatMessageModel>> fetchOlderMessages({
+    required String connectionId,
+    required ChatMessageModel oldestMessage,
+    int limit = 50,
+  }) async {
+    try {
+      final docRef = _firestore
+          .collection('connections')
+          .doc(connectionId)
+          .collection('messages')
+          .doc(oldestMessage.id);
+
+      final docSnap = await docRef.get();
+      if (!docSnap.exists) {
+        throw StateError(
+          '[FIRESTORE] Pagination cursor document not found for message ${oldestMessage.id}. '
+          'Cannot construct a safe cursor without skipping or duplicating records.',
+        );
+      }
+
+      final data = docSnap.data();
+      if (data == null || data['timestamp'] == null) {
+        throw StateError(
+          '[FIRESTORE] Pagination cursor document ${oldestMessage.id} lacks ordered field "timestamp". '
+          'Aborting pagination to prevent silent query failure or omitted records.',
+        );
+      }
+
+      final Query<Map<String, dynamic>> query = _firestore
+          .collection('connections')
+          .doc(connectionId)
+          .collection('messages')
+          .orderBy('timestamp', descending: true)
+          .startAfterDocument(docSnap)
+          .limit(limit);
+
+      final snapshot = await query.get();
+      final List<ChatMessageModel> messages = [];
+      for (final doc in snapshot.docs) {
+        try {
+          messages.add(ChatMessageModel.fromMap(doc.data(), doc.id,
+              connectionIdFallback: connectionId));
+        } catch (e) {
+          debugPrint('[FIRESTORE] Error parsing older message doc ${doc.id}: $e');
+        }
+      }
+
+      // Sort chronologically ascending with stable deterministic tie-breaker
+      messages.sort((a, b) {
+        final cmp = a.timestamp.compareTo(b.timestamp);
+        if (cmp != 0) return cmp;
+        return a.id.compareTo(b.id);
+      });
+      return messages;
+    } catch (e) {
+      debugPrint('[FIRESTORE] Error fetching older messages: $e');
+      rethrow;
+    }
+  }
+
+  /// Bounded fallback fetch for conversations where the primary ordered query
+  /// (`orderBy('timestamp')`) returned empty results because legacy message
+  /// documents lack the `'timestamp'` field.
+  ///
+  /// **Limitations / caller contract:**
+  ///   - Returns at most [limit] documents (default 100) ordered by document ID,
+  ///     NOT by true chronological send time.  Global ordering is NOT guaranteed.
+  ///   - The caller is responsible for determining that the ordered query
+  ///     returned 0 results for a connection known to have messages (e.g. the
+  ///     connection document's `lastMessageText` is non-empty).
+  ///   - This method does NOT suppress or override a real PERMISSION_DENIED
+  ///     or network error; those propagate to the caller so they can be surfaced
+  ///     to the user rather than mistaken for an empty conversation.
+  ///   - Do NOT use this as the primary stream; use only as a one-time
+  ///     diagnostic/recovery fetch.
+  Future<List<ChatMessageModel>> fetchLatestMessagesUnordered({
+    required String connectionId,
+    int limit = 100,
+  }) async {
+    final snapshot = await _firestore
+        .collection('connections')
+        .doc(connectionId)
+        .collection('messages')
+        .orderBy(FieldPath.documentId, descending: true)
+        .limit(limit)
+        .get();
+    final List<ChatMessageModel> messages = [];
+    for (final doc in snapshot.docs) {
+      try {
+        messages.add(ChatMessageModel.fromMap(doc.data(), doc.id,
+            connectionIdFallback: connectionId));
+      } catch (e) {
+        debugPrint(
+            '[FIRESTORE] fetchLatestMessagesUnordered parse error ${doc.id}: $e');
+      }
+    }
+    // Sort client-side by whatever timestamp fields are available.
+    messages.sort((a, b) {
+      final cmp = a.timestamp.compareTo(b.timestamp);
+      if (cmp != 0) return cmp;
+      return a.id.compareTo(b.id);
+    });
+    return messages;
+  }
+
+
+
   /// Send chat message to connections/{connectionId}/messages/{messageId}
+  ///
+  /// Phase 2A (F-01): Uses a Firestore transaction so that the unreadCounts
+  /// increment is computed against the freshest server state, eliminating the
+  /// client-side read-then-write race that could overwrite a concurrent
+  /// markMessagesAsRead operation.
   Future<void> sendChatMessage(ChatMessageModel message) async {
     try {
       final msgRef = _firestore
@@ -762,66 +1470,172 @@ class FirestoreService {
           ? message.receiverId
           : message.recipientId;
 
-      final batch = _firestore.batch();
-      batch.set(msgRef, message.toMap());
-      batch.set(
-        connRef,
-        {
-          'lastMessageText': previewContent,
-          'lastMessageTimestamp': message.createdAt.toIso8601String(),
-          'lastMessageSenderId': message.senderId,
-          'updatedAt': message.createdAt.toIso8601String(),
-          if (recipientId.isNotEmpty)
-            'unreadCounts': {
-              recipientId: FieldValue.increment(1),
-            },
-        },
-        SetOptions(merge: true),
-      );
+      final messageData = message.toMap();
+      messageData['serverTimestamp'] = FieldValue.serverTimestamp();
 
-      await batch.commit();
+      // Phase 2A: run a transaction so the unreadCounts increment is applied
+      // against the freshest server-side value, not a potentially stale
+      // client-read snapshot.
+      await _firestore.runTransaction((txn) async {
+        // 1. Read current connection state inside the transaction.
+        final connSnap = await txn.get(connRef);
+        Map<String, dynamic> unreadCountsMap = {};
+        List<dynamic> participants = [];
+        if (connSnap.exists) {
+          final connData = connSnap.data() ?? {};
+          if (connData['unreadCounts'] is Map) {
+            unreadCountsMap =
+                Map<String, dynamic>.from(connData['unreadCounts']);
+          }
+          if (connData['participants'] is List) {
+            participants = connData['participants'] as List<dynamic>;
+          }
+        }
+
+        // 2. Compute new unreadCounts: increment recipient by 1, preserve sender.
+        if (recipientId.isNotEmpty) {
+          final currentRecipientCount = (unreadCountsMap[recipientId] is num)
+              ? (unreadCountsMap[recipientId] as num).toInt()
+              : 0;
+          unreadCountsMap[recipientId] = currentRecipientCount + 1;
+        }
+        if (!unreadCountsMap.containsKey(message.senderId)) {
+          unreadCountsMap[message.senderId] = 0;
+        }
+        // Restrict keys to known participants to satisfy security rules.
+        if (participants.isNotEmpty) {
+          unreadCountsMap.removeWhere((k, v) => !participants.contains(k));
+        }
+
+        // 3. Write message document.
+        txn.set(msgRef, messageData);
+
+        // 4. Merge connection metadata (last-message preview + unread counts).
+        txn.set(
+          connRef,
+          {
+            'lastMessageText': previewContent,
+            'lastMessageTimestamp': message.createdAt.toUtc().toIso8601String(),
+            'lastMessageSenderId': message.senderId,
+            'updatedAt': message.createdAt.toUtc().toIso8601String(),
+            if (recipientId.isNotEmpty) 'unreadCounts': unreadCountsMap,
+          },
+          SetOptions(merge: true),
+        );
+      });
       debugPrint(
           '[FIRESTORE] Chat message sent for connection: ${message.connectionId}');
+
+      // Trigger deterministic in-app notification for message recipient
+      if (recipientId.isNotEmpty && recipientId != message.senderId) {
+        final notif = NotificationModel(
+          id: 'notif_msg_${message.id}',
+          userId: recipientId,
+          fromUserId: message.senderId,
+          fromUsername: 'Someone',
+          fromUserProfilePic: '',
+          type: NotificationType.message,
+          title: 'New Message',
+          body: previewContent.isNotEmpty
+              ? previewContent
+              : 'Sent an attachment',
+          connectionId: message.connectionId,
+        );
+        createNotification(notif).catchError((e) {
+          debugPrint('[FIRESTORE] Message notification error: $e');
+        });
+      }
     } catch (e) {
       debugPrint('[FIRESTORE] Error sending chat message: $e');
       rethrow;
     }
   }
 
+
   /// Mark incoming messages as read in connections/{connectionId}/messages
   Future<void> markMessagesAsRead(
       String connectionId, String currentUserId) async {
     try {
+      // Query unread messages in this connection without requiring composite multi-field indexes
       final snapshot = await _firestore
           .collection('connections')
           .doc(connectionId)
           .collection('messages')
-          .where('recipientId', isEqualTo: currentUserId)
           .where('isRead', isEqualTo: false)
           .get();
 
       final batch = _firestore.batch();
+      int updatedMessagesCount = 0;
+
       for (final doc in snapshot.docs) {
-        batch.update(doc.reference, {
-          'isRead': true,
-          'deliveryStatus': 'read',
-        });
+        final data = doc.data();
+        final recipient = data['recipientId'] ?? data['receiverId'];
+        // Update only messages strictly intended for current user as recipient
+        // to strictly satisfy firestore.rules (line 303: receiverId == auth.uid || recipientId == auth.uid)
+        if (recipient == currentUserId) {
+          batch.update(doc.reference, {
+            'isRead': true,
+            'deliveryStatus': 'read',
+          });
+          updatedMessagesCount++;
+        }
       }
+
       final connRef = _firestore.collection('connections').doc(connectionId);
-      batch.set(
-        connRef,
-        {
-          'unreadCounts': {
-            currentUserId: 0,
-          },
-        },
-        SetOptions(merge: true),
-      );
-      await batch.commit();
-      debugPrint(
-          '[FIRESTORE] Marked ${snapshot.docs.length} messages as read in connection: $connectionId');
-    } catch (e) {
-      debugPrint('[FIRESTORE] Error marking messages as read: $e');
+      bool shouldUpdateConn = false;
+      try {
+        final connSnap = await connRef.get();
+        if (connSnap.exists) {
+          final connData = connSnap.data() ?? {};
+          final dynamic existingUnreads = connData['unreadCounts'];
+          final List participants = (connData['participants'] is List)
+              ? connData['participants'] as List
+              : [];
+          if (existingUnreads is Map) {
+            final currentCount = existingUnreads[currentUserId];
+            if (currentCount != 0 || updatedMessagesCount > 0) {
+              final Map<String, dynamic> updatedMap =
+                  Map<String, dynamic>.from(existingUnreads);
+              updatedMap[currentUserId] = 0;
+              // Clean keys to ensure they only contain participants according to rules
+              if (participants.isNotEmpty) {
+                updatedMap.removeWhere((k, v) => !participants.contains(k));
+              }
+              batch.update(connRef, {
+                'unreadCounts': updatedMap,
+              });
+              shouldUpdateConn = true;
+            }
+          } else {
+            final Map<String, dynamic> initialMap = {currentUserId: 0};
+            for (final p in participants) {
+              if (p is String && p != currentUserId) {
+                initialMap[p] = 0;
+              }
+            }
+            batch.set(
+              connRef,
+              {
+                'unreadCounts': initialMap,
+              },
+              SetOptions(merge: true),
+            );
+            shouldUpdateConn = true;
+          }
+        }
+      } catch (e) {
+        debugPrint(
+            '[FIRESTORE] Warning reading connection during markAsRead: $e');
+      }
+
+      if (updatedMessagesCount > 0 || shouldUpdateConn) {
+        await batch.commit();
+        debugPrint(
+            '[FIRESTORE] Marked $updatedMessagesCount messages as read in connection: $connectionId');
+      }
+    } catch (e, stack) {
+      debugPrint('[FIRESTORE] Error marking messages as read in $connectionId: $e\n$stack');
+      rethrow;
     }
   }
 
@@ -840,6 +1654,7 @@ class FirestoreService {
       debugPrint('[FIRESTORE] Message deleted for user: $userId');
     } catch (e) {
       debugPrint('[FIRESTORE] Error deleting message for me: $e');
+      rethrow;
     }
   }
 
@@ -1063,8 +1878,30 @@ class FirestoreService {
         debugPrint('[FIRESTORE] Deleted post: ${postDoc.id}');
       }
 
-      // 2. Delete subcollections of users/{userId}
-      // 2a. Private settings
+      // 2. Discover profile media URLs and delete the public user profile document: users/{userId}
+      // Establishing an unambiguous, non-reversible deletion state BEFORE subcollection cleanup
+      try {
+        final userDoc = await _firestore.collection('users').doc(userId).get();
+        if (userDoc.exists && userDoc.data() != null) {
+          final uData = userDoc.data()!;
+          if (uData['profilePicUrl'] != null &&
+              (uData['profilePicUrl'] as String).isNotEmpty) {
+            discoveredMediaUrls.add(uData['profilePicUrl'] as String);
+          }
+          if (uData['verificationPhoto'] != null &&
+              (uData['verificationPhoto'] as String).isNotEmpty) {
+            discoveredMediaUrls.add(uData['verificationPhoto'] as String);
+          }
+        }
+      } catch (e) {
+        debugPrint('[FIRESTORE] Error reading profile media URLs: $e');
+      }
+
+      await _firestore.collection('users').doc(userId).delete();
+      debugPrint('[FIRESTORE] Public profile deleted for UID: $userId');
+
+      // 3. Delete subcollections of users/{userId} (authorized by !exists(/users/{userId}))
+      // 3a. Private settings
       try {
         await _firestore
             .collection('users')
@@ -1076,7 +1913,7 @@ class FirestoreService {
         debugPrint('[FIRESTORE] Error deleting private settings: $e');
       }
 
-      // 2b. Follows subcollection
+      // 3b. Follows subcollection
       try {
         final followsSnapshot = await _firestore
             .collection('users')
@@ -1090,7 +1927,7 @@ class FirestoreService {
         debugPrint('[FIRESTORE] Error deleting follows subcollection: $e');
       }
 
-      // 2c. Blocks subcollection
+      // 3c. Blocks subcollection
       try {
         final blocksSnapshot = await _firestore
             .collection('users')
@@ -1104,7 +1941,7 @@ class FirestoreService {
         debugPrint('[FIRESTORE] Error deleting blocks subcollection: $e');
       }
 
-      // 2d. User notifications subcollection
+      // 3d. User notifications subcollection
       try {
         final notifsSnapshot = await _firestore
             .collection('users')
@@ -1119,7 +1956,7 @@ class FirestoreService {
             '[FIRESTORE] Error deleting notifications subcollection: $e');
       }
 
-      // 3. Delete direct notifications where userId == userId
+      // 4. Delete direct notifications where userId == userId
       try {
         final directNotifsSnapshot = await _firestore
             .collection('notifications')
@@ -1132,7 +1969,7 @@ class FirestoreService {
         debugPrint('[FIRESTORE] Error deleting direct notifications: $e');
       }
 
-      // 4. Handle shared connections: soft-delete sent messages & anonymize user data
+      // 5. Handle shared connections: soft-delete sent messages & anonymize user data
       // Preserves shared conversation history for the other participant
       try {
         final connectionsSnapshot = await _firestore
@@ -1185,28 +2022,6 @@ class FirestoreService {
       } catch (e) {
         debugPrint('[FIRESTORE] Error handling user connections: $e');
       }
-
-      // 5. Discover profile media URLs before document deletion
-      try {
-        final userDoc = await _firestore.collection('users').doc(userId).get();
-        if (userDoc.exists && userDoc.data() != null) {
-          final uData = userDoc.data()!;
-          if (uData['profilePicUrl'] != null &&
-              (uData['profilePicUrl'] as String).isNotEmpty) {
-            discoveredMediaUrls.add(uData['profilePicUrl'] as String);
-          }
-          if (uData['verificationPhoto'] != null &&
-              (uData['verificationPhoto'] as String).isNotEmpty) {
-            discoveredMediaUrls.add(uData['verificationPhoto'] as String);
-          }
-        }
-      } catch (e) {
-        debugPrint('[FIRESTORE] Error reading profile media URLs: $e');
-      }
-
-      // 6. Delete the public user profile document: users/{userId}
-      await _firestore.collection('users').doc(userId).delete();
-      debugPrint('[FIRESTORE] Public profile deleted for UID: $userId');
 
       return discoveredMediaUrls;
     } catch (e) {

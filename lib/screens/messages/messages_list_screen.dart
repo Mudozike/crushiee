@@ -9,6 +9,7 @@ import '../../providers/connection_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/database_service.dart';
 import '../../widgets/crushie_avatar.dart';
+import '../../widgets/status_badge.dart';
 import '../profile/profile_screen.dart';
 
 class MessagesListScreen extends StatelessWidget {
@@ -19,34 +20,64 @@ class MessagesListScreen extends StatelessWidget {
     required this.onSelectConnection,
   }) : super(key: key);
 
-  String _formatPresenceStatus(bool isOnline, DateTime lastSeen) {
-    if (isOnline) return 'Online';
-    final diff = DateTime.now().difference(lastSeen);
+  static String formatPresenceStatus(bool isOnline, DateTime? lastSeen,
+      {DateTime? now}) {
+    if (StatusBadge.isEffectiveOnline(isOnline, lastSeen, now: now)) {
+      return 'Online';
+    }
+    if (lastSeen == null) return 'Offline';
+    final current = (now ?? DateTime.now()).toLocal();
+    final localSeen = lastSeen.toLocal();
+    final diff = current.difference(localSeen);
+
+    if (diff.isNegative || diff.inSeconds < 60) {
+      return 'Last seen just now';
+    }
     if (diff.inMinutes < 60) {
       return 'Last seen ${diff.inMinutes}m ago';
-    } else if (diff.inHours < 24) {
+    }
+
+    final today = DateTime(current.year, current.month, current.day);
+    final seenDate = DateTime(localSeen.year, localSeen.month, localSeen.day);
+    final dayDiff = today.difference(seenDate).inDays;
+
+    if (dayDiff <= 0) {
       return 'Last seen ${diff.inHours}h ago';
-    } else {
+    } else if (dayDiff == 1) {
       return 'Last seen yesterday';
+    } else if (dayDiff < 7) {
+      return 'Last seen ${dayDiff}d ago';
+    } else if (localSeen.year == current.year) {
+      return 'Last seen ${DateFormat('d MMM').format(localSeen)}';
+    } else {
+      return 'Last seen ${DateFormat('d MMM yyyy').format(localSeen)}';
     }
   }
 
-  String _formatConversationTimestamp(DateTime dt) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final messageDate = DateTime(dt.year, dt.month, dt.day);
+  static String formatConversationTimestamp(DateTime? dt, {DateTime? now}) {
+    if (dt == null) return '';
+    final current = (now ?? DateTime.now()).toLocal();
+    final localDt = dt.toLocal();
+    final today = DateTime(current.year, current.month, current.day);
+    final messageDate = DateTime(localDt.year, localDt.month, localDt.day);
     final difference = today.difference(messageDate).inDays;
 
-    if (difference == 0) {
-      return DateFormat('h:mm a').format(dt); // e.g. 9:30 PM
+    if (difference <= 0) {
+      return DateFormat('h:mm a').format(localDt); // e.g. 9:30 PM
     } else if (difference == 1) {
       return 'Yesterday';
-    } else if (dt.year == now.year) {
-      return DateFormat('d MMM').format(dt); // e.g. 12 Aug
+    } else if (localDt.year == current.year) {
+      return DateFormat('d MMM').format(localDt); // e.g. 12 Aug
     } else {
-      return DateFormat('d MMM yyyy').format(dt); // e.g. 12 Aug 2025
+      return DateFormat('d MMM yyyy').format(localDt); // e.g. 12 Aug 2025
     }
   }
+
+  String _formatPresenceStatus(bool isOnline, DateTime? lastSeen) =>
+      formatPresenceStatus(isOnline, lastSeen);
+
+  String _formatConversationTimestamp(DateTime? dt) =>
+      formatConversationTimestamp(dt);
 
   @override
   Widget build(BuildContext context) {
@@ -367,29 +398,48 @@ class MessagesListScreen extends StatelessWidget {
                               final latestMessage =
                                   messages.isNotEmpty ? messages.last : null;
 
-                              final previewText = latestMessage != null
-                                  ? latestMessage.message
+                              final connTime =
+                                  conn.lastMessageTimestamp ?? conn.updatedAt;
+                              bool preferLatestMessage = false;
+                              if (latestMessage != null) {
+                                if (latestMessage.timestamp.isAfter(connTime) ||
+                                    latestMessage.timestamp
+                                        .isAtSameMomentAs(connTime) ||
+                                    (conn.lastMessageText == null ||
+                                        conn.lastMessageText!.isEmpty)) {
+                                  preferLatestMessage = true;
+                                }
+                              }
+
+                              final previewText = preferLatestMessage
+                                  ? latestMessage!.message
                                   : (conn.lastMessageText != null &&
                                           conn.lastMessageText!.isNotEmpty)
                                       ? conn.lastMessageText!
-                                      : (conn.recipientContactDetails.isNotEmpty
-                                          ? 'Unlocked ${conn.recipientContactMethod}: ${conn.recipientContactDetails}'
-                                          : 'Tap to start chatting');
+                                      : (latestMessage != null
+                                          ? latestMessage.message
+                                          : 'Connected! Tap to start chatting');
 
-                              final previewTime = latestMessage != null
-                                  ? latestMessage.timestamp
+                              final previewTime = preferLatestMessage
+                                  ? latestMessage!.timestamp
                                   : (conn.lastMessageTimestamp ??
-                                      conn.updatedAt);
+                                      (latestMessage != null
+                                          ? latestMessage.timestamp
+                                          : conn.updatedAt));
 
-                              final persistedUnread =
-                                  conn.unreadCountForUser(activeUserId);
-                              final unreadCount = persistedUnread > 0
-                                  ? persistedUnread
-                                  : messages
-                                      .where((m) =>
-                                          m.senderId == otherUserId &&
-                                          !m.isRead)
-                                      .length;
+                              final int unreadCount;
+                              if (conn.unreadCounts.containsKey(activeUserId)) {
+                                unreadCount =
+                                    conn.unreadCountForUser(activeUserId);
+                              } else {
+                                unreadCount = messages
+                                    .where((m) =>
+                                        (m.recipientId == activeUserId ||
+                                            (m.senderId.isNotEmpty &&
+                                                m.senderId == otherUserId)) &&
+                                        !m.isRead)
+                                    .length;
+                              }
 
                               final isMascot =
                                   otherPic.startsWith('crushie_avatar_');

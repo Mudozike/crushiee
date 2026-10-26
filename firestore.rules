@@ -41,54 +41,29 @@ service cloud.firestore {
               newData.monthlyConnections >= oldData.monthlyConnections);
     }
 
+    // Collection group read rule for 'follows' queries (e.g. followers count aggregation)
+    match /{path=**}/follows/{followId} {
+      allow read: if isSignedIn();
+    }
+
     // Public User Profiles Collection
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create: if isOwner(userId) && hasNoPrivilegeEscalation(request.resource.data);
-      allow update: if isSignedIn() && (
-        (
-          isOwner(userId) &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'role',
-            'isPremium',
-            'premiumExpiry',
-            'isVerified',
-            'verifiedExpiry',
-            'followersCount',
-            'dailyConnections',
-            'dailyConnectionsDate',
-            'monthlyConnections',
-            'monthlyConnectionsMonth'
-          ]) &&
-          (
-            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['followingCount']) ||
-            (
-              (
-                request.resource.data.followingCount == resource.data.followingCount + 1 ||
-                request.resource.data.followingCount == resource.data.followingCount - 1 ||
-                (!('followingCount' in resource.data) && request.resource.data.followingCount == 1)
-              ) &&
-              request.resource.data.followingCount >= 0
-            )
-          )
-        ) ||
-        (
-          !isOwner(userId) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount']) &&
-          !isBlocked(userId, request.auth.uid) &&
-          request.resource.data.followersCount >= 0 &&
-          (
-            (
-              request.resource.data.followersCount == resource.data.followersCount + 1 &&
-              !exists(/databases/$(database)/documents/users/$(request.auth.uid)/follows/$(userId))
-            ) ||
-            (
-              request.resource.data.followersCount == resource.data.followersCount - 1 &&
-              exists(/databases/$(database)/documents/users/$(request.auth.uid)/follows/$(userId))
-            )
-          )
-        )
-      );
+      allow update: if isSignedIn() && isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role',
+          'isPremium',
+          'premiumExpiry',
+          'isVerified',
+          'verifiedExpiry',
+          'followersCount',
+          'followingCount',
+          'dailyConnections',
+          'dailyConnectionsDate',
+          'monthlyConnections',
+          'monthlyConnectionsMonth'
+        ]);
       allow delete: if isOwner(userId);
 
       // Private Settings Sub-collection (Owner Only, Protected against Privilege Escalation & Quota Resets)
@@ -118,10 +93,11 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
-      // Follows Sub-collection (Guarded against blocked users)
+      // Follows Sub-collection (Owner can only manage their own follows; self-follow forbidden)
       match /follows/{targetId} {
         allow read: if isSignedIn();
-        allow write: if isOwner(userId) && !isBlocked(userId, targetId);
+        allow create: if isOwner(userId) && targetId != userId;
+        allow delete: if isOwner(userId);
       }
 
       // Blocks Sub-collection (Owner Only)
@@ -133,7 +109,19 @@ service cloud.firestore {
       // Notifications Sub-collection
       match /notifications/{notificationId} {
         allow read, update, delete: if isOwner(userId);
-        allow create: if isSignedIn();
+        allow create: if isSignedIn() && (
+          // 1. Owner creating notifications for themselves (e.g. system, account events)
+          (isOwner(userId) && request.resource.data.userId == userId) ||
+          // 2. Authenticated other user creating authorized peer interaction notifications
+          (!isOwner(userId) &&
+           request.resource.data.userId == userId &&
+           request.resource.data.fromUserId == request.auth.uid &&
+           request.resource.data.type in [
+             'crush', 'crushComment', 'commentReply', 'follow',
+             'connectionRequest', 'connectionAccepted', 'connectionDeclined',
+             'message', 'mention', 'locationPost'
+           ])
+        );
       }
     }
 

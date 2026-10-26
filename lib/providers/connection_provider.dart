@@ -35,6 +35,24 @@ class ConnectionProvider extends ChangeNotifier {
   StreamSubscription<List<ConnectionModel>>? _subscription;
   String? _currentUserId;
 
+  // Phase 2C (F-02): Local read-zero override registry.
+  // Key: connectionId. Value: server lastMessageTimestamp at the time the user
+  // opened the chat (captured from the existing connection model).
+  // When a stream snapshot arrives with unreadCount > 0 for this user, we check
+  // whether the connection's lastMessageTimestamp is still the same as the value
+  // we recorded — meaning no genuinely new message arrived — and if so we
+  // override the stream count to 0 locally.
+  // When lastMessageTimestamp advances (new message from other party), we
+  // remove the override and let the stream count through.
+  //
+  // LIMITATION: This heuristic relies on the connection document's
+  // lastMessageTimestamp, which is written server-side as part of message send.
+  // It cannot guarantee correctness when both a new message and a read happen
+  // within the same server timestamp window, or across devices where the local
+  // read has not yet propagated. Do not claim this is race-free across devices.
+  final Map<String, DateTime?> _localReadZeroByConnection = {};
+
+
   void initUserConnections(String userId) {
     if (userId.trim().isEmpty) return;
     if (_currentUserId == userId && _subscription != null) return;
@@ -62,7 +80,41 @@ class ConnectionProvider extends ChangeNotifier {
             }
           }
         }
-        _firestoreConnections = uniqueByOtherUser.values.toList();
+        final list = uniqueByOtherUser.values.map((conn) {
+          // Phase 2C: apply local read-zero override if the connection's
+          // lastMessageTimestamp has not advanced past the recorded value.
+          final userId = _currentUserId;
+          if (userId != null &&
+              _localReadZeroByConnection.containsKey(conn.id)) {
+            final recordedTimestamp = _localReadZeroByConnection[conn.id];
+            final currentTimestamp =
+                conn.lastMessageTimestamp ?? conn.updatedAt;
+            // If the server timestamp is the same as when we read (or earlier),
+            // no new message has arrived; preserve the local zero.
+            if (recordedTimestamp != null &&
+                !currentTimestamp.isAfter(recordedTimestamp)) {
+              if (conn.unreadCountForUser(userId) > 0) {
+                final overridden = Map<String, int>.from(conn.unreadCounts);
+                overridden[userId] = 0;
+                return conn.copyWith(unreadCounts: overridden);
+              }
+              return conn;
+            } else {
+              // New message arrived — remove override and accept stream count.
+              _localReadZeroByConnection.remove(conn.id);
+            }
+          }
+          return conn;
+        }).toList();
+
+        list.sort((a, b) {
+          final timeA = a.lastMessageTimestamp ?? a.updatedAt;
+          final timeB = b.lastMessageTimestamp ?? b.updatedAt;
+          final cmp = timeB.compareTo(timeA);
+          if (cmp != 0) return cmp;
+          return b.id.compareTo(a.id);
+        });
+        _firestoreConnections = list;
         _isLoading = false;
         notifyListeners();
       }, onError: (e) {
@@ -88,9 +140,38 @@ class ConnectionProvider extends ChangeNotifier {
     _subscription = null;
     _currentUserId = null;
     _firestoreConnections = [];
+    _localReadZeroByConnection.clear();
     _isLoading = false;
     notifyListeners();
   }
+
+
+  /// Optimistically clears unread badge for a connection locally when user views the chat.
+  /// Records the connection's current lastMessageTimestamp so stale snapshots
+  /// arriving later can be suppressed (Phase 2C).
+  void markConnectionAsReadLocally(String connectionId, String userId) {
+    bool changed = false;
+    for (int i = 0; i < _firestoreConnections.length; i++) {
+      final conn = _firestoreConnections[i];
+      if (conn.id == connectionId) {
+        if (conn.unreadCountForUser(userId) > 0) {
+          final updatedUnreads = Map<String, int>.from(conn.unreadCounts);
+          updatedUnreads[userId] = 0;
+          _firestoreConnections[i] =
+              conn.copyWith(unreadCounts: updatedUnreads);
+          changed = true;
+        }
+        // Record the lastMessageTimestamp at the time of the read so Phase 2C
+        // can distinguish stale snapshots from genuinely new messages.
+        _localReadZeroByConnection[connectionId] =
+            conn.lastMessageTimestamp ?? conn.updatedAt;
+      }
+    }
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
 
   List<ConnectionModel> getAcceptedConnections(String userId) {
     initUserConnections(userId);

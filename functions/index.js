@@ -101,6 +101,38 @@ exports.paystackWebhook = functions.https.onRequest(async (req, res) => {
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           }, { merge: true });
         }
+
+        // 3. Create private account/payment notification
+        const notifId = `notif_pay_${reference}`;
+        let notifType = 'system';
+        let notifTitle = 'Payment Confirmed';
+        let notifBody = `Your payment of KES ${amount} was processed successfully.`;
+        if (type === 'premium' || type === 'bundle') {
+          notifType = 'premium';
+          notifTitle = 'Premium Activated!';
+          notifBody = 'Enjoy unlimited connections and premium features for the next 30 days.';
+        } else if (type === 'verified') {
+          notifType = 'verification';
+          notifTitle = 'Profile Verified!';
+          notifBody = 'Your blue verification badge has been activated on your profile.';
+        } else if (type === 'boost') {
+          notifType = 'boost';
+          notifTitle = 'Post Boosted!';
+          notifBody = 'Your post is now boosted to the top of the community feed.';
+        }
+
+        await db.collection('users').doc(userId).collection('notifications').doc(notifId).set({
+          id: notifId,
+          userId: userId,
+          fromUserId: 'system',
+          fromUsername: 'Crushie Official',
+          fromUserProfilePic: 'crushie_avatar_0',
+          type: notifType,
+          title: notifTitle,
+          body: notifBody,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        }, { merge: true });
       }
 
       return res.status(200).send('Webhook processed successfully');
@@ -112,3 +144,110 @@ exports.paystackWebhook = functions.https.onRequest(async (req, res) => {
 
   return res.status(200).send('Event received');
 });
+
+/**
+ * Trigger push notification when a new in-app notification document is created
+ */
+exports.sendPushOnNotificationCreated = functions.firestore
+  .document('users/{userId}/notifications/{notificationId}')
+  .onCreate(async (snap, context) => {
+    const notif = snap.data();
+    const userId = context.params.userId;
+    if (!notif || notif.isRead || notif.pushDispatched) return null;
+
+    try {
+      // 1. Mark push as dispatched early to avoid duplicate triggers
+      await snap.ref.update({
+        pushDispatched: true,
+        pushDispatchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // 2. Read target user's registered FCM tokens
+      const userDoc = await db.collection('users').doc(userId).get();
+      const userData = userDoc.data() || {};
+      
+      const tokenSet = new Set();
+      if (typeof userData.fcmToken === 'string' && userData.fcmToken.trim().length > 0) {
+        tokenSet.add(userData.fcmToken.trim());
+      }
+      if (Array.isArray(userData.fcmTokens)) {
+        userData.fcmTokens.forEach((t) => {
+          if (typeof t === 'string' && t.trim().length > 0) tokenSet.add(t.trim());
+        });
+      }
+
+      const tokens = Array.from(tokenSet);
+      if (tokens.length === 0) {
+        console.log(`[PUSH] User ${userId} has no registered FCM tokens. Skipping push.`);
+        return null;
+      }
+
+      const payload = {
+        notification: {
+          title: notif.title || 'New Notification',
+          body: notif.body || 'You have a new alert on Crushie',
+        },
+        data: {
+          notificationId: notif.id || '',
+          type: notif.type || '',
+          postId: notif.postId || '',
+          connectionId: notif.connectionId || '',
+          fromUserId: notif.fromUserId || '',
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'crushie_notifications',
+            sound: 'default',
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          },
+        },
+      };
+
+      // 3. Dispatch to all active tokens
+      const staleTokens = [];
+      const sendPromises = tokens.map(async (token) => {
+        try {
+          await admin.messaging().send({
+            token: token,
+            ...payload,
+          });
+        } catch (err) {
+          const errCode = err.code || err.errorInfo?.code;
+          if (
+            errCode === 'messaging/registration-token-not-registered' ||
+            errCode === 'messaging/invalid-registration-token' ||
+            errCode === 'messaging/invalid-argument'
+          ) {
+            console.warn(`[PUSH] Stale/invalid FCM token detected for ${userId}: ${token}`);
+            staleTokens.push(token);
+          } else {
+            console.error(`[PUSH] Error sending to token ${token}:`, err);
+          }
+        }
+      });
+
+      await Promise.all(sendPromises);
+
+      // 4. Clean up stale tokens from user document
+      if (staleTokens.length > 0) {
+        console.log(`[PUSH] Cleaning up ${staleTokens.length} stale tokens for user ${userId}`);
+        const userUpdate = {
+          fcmTokens: admin.firestore.FieldValue.arrayRemove(...staleTokens),
+        };
+        if (staleTokens.includes(userData.fcmToken)) {
+          userUpdate.fcmToken = admin.firestore.FieldValue.delete();
+        }
+        await db.collection('users').doc(userId).update(userUpdate).catch((cleanupErr) => {
+          console.error('[PUSH] Stale token cleanup error:', cleanupErr);
+        });
+      }
+
+      console.log(`[PUSH] Push notification process completed for ${userId}`);
+      return true;
+    } catch (err) {
+      console.error(`[PUSH] Fatal error sending push notification to ${userId}:`, err);
+      return null;
+    }
+  });
+

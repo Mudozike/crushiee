@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../config/app_colors.dart';
 
 class ContactRevealCard extends StatelessWidget {
@@ -7,6 +6,8 @@ class ContactRevealCard extends StatelessWidget {
   final String contactDetails;
   final String username;
   final bool isBlocked;
+  final bool isPaid;
+  final bool isAuthorized;
 
   const ContactRevealCard({
     Key? key,
@@ -14,7 +15,36 @@ class ContactRevealCard extends StatelessWidget {
     required this.contactDetails,
     required this.username,
     this.isBlocked = false,
+    this.isPaid = false,
+    this.isAuthorized = false,
   }) : super(key: key);
+
+  /// Helper to check whether contact information is present and valid.
+  static bool isValidContact(String? method, String? details) {
+    if (method == null || details == null) return false;
+    final m = method.trim().toLowerCase();
+    final d = details.trim();
+    if (m.isEmpty || d.isEmpty) return false;
+    if (m == 'whatsapp' || m == 'phone call' || m == 'phone') {
+      final digits = d.replaceAll(RegExp(r'[^0-9]'), '');
+      return digits.length >= 8 && digits.length <= 15;
+    }
+    if (m == 'email') {
+      return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(d);
+    }
+    if (m == 'telegram') {
+      final handle = d.replaceAll('@', '').trim();
+      return handle.length >= 3;
+    }
+    return false;
+  }
+
+  /// Normalizes phone numbers, stripping out non-digit characters.
+  static String? normalizePhone(String raw) {
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length < 8 || digits.length > 15) return null;
+    return digits;
+  }
 
   IconData get _icon {
     switch (contactMethod.toLowerCase()) {
@@ -23,6 +53,7 @@ class ContactRevealCard extends StatelessWidget {
       case 'telegram':
         return Icons.send;
       case 'phone call':
+      case 'phone':
         return Icons.phone;
       case 'email':
         return Icons.email;
@@ -38,6 +69,7 @@ class ContactRevealCard extends StatelessWidget {
       case 'telegram':
         return Colors.lightBlue;
       case 'phone call':
+      case 'phone':
         return Colors.orange;
       case 'email':
         return Colors.purple;
@@ -46,42 +78,31 @@ class ContactRevealCard extends StatelessWidget {
     }
   }
 
-  void _launchContact(BuildContext context) async {
+  void _showRestrictedContactNotice(BuildContext context) {
     if (isBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Unblock @$username to open $contactMethod.")),
+        SnackBar(content: Text('Unblock @$username to view contact actions.')),
       );
       return;
     }
-
-    Uri uri;
-    switch (contactMethod.toLowerCase()) {
-      case 'whatsapp':
-        final cleanPhone = contactDetails.replaceAll(RegExp(r'[^0-9+]'), '');
-        uri = Uri.parse('https://wa.me/$cleanPhone');
-        break;
-      case 'telegram':
-        final cleanHandle = contactDetails.replaceAll('@', '');
-        uri = Uri.parse('https://t.me/$cleanHandle');
-        break;
-      case 'phone call':
-        uri = Uri.parse('tel:$contactDetails');
-        break;
-      case 'email':
-        uri = Uri.parse('mailto:$contactDetails');
-        break;
-      default:
-        uri = Uri.parse('tel:$contactDetails');
-    }
-
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Direct contact opening is temporarily unavailable pending server verification. Please use secure in-app messaging.',
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!isValidContact(contactMethod, contactDetails)) {
+      return const SizedBox.shrink();
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final hasAccess = (isPaid || isAuthorized) && !isBlocked;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -90,7 +111,11 @@ class ContactRevealCard extends StatelessWidget {
         color: isDark ? AppColors.darkCard : Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isBlocked ? Colors.grey.withOpacity(0.3) : _badgeColor.withOpacity(0.3),
+          color: isBlocked
+              ? Colors.grey.withOpacity(0.3)
+              : (hasAccess
+                  ? _badgeColor.withOpacity(0.3)
+                  : Colors.amber.withOpacity(0.3)),
           width: 1,
         ),
       ),
@@ -101,7 +126,9 @@ class ContactRevealCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: isBlocked ? Colors.grey : _badgeColor,
+                  color: isBlocked
+                      ? Colors.grey
+                      : (hasAccess ? _badgeColor : Colors.amber.shade700),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(_icon, color: Colors.white, size: 18),
@@ -114,19 +141,33 @@ class ContactRevealCard extends StatelessWidget {
                     Row(
                       children: [
                         Icon(
-                          isBlocked ? Icons.lock : Icons.lock_open,
+                          isBlocked
+                              ? Icons.block
+                              : (hasAccess ? Icons.lock_open : Icons.lock),
                           size: 13,
-                          color: isBlocked ? Colors.grey : Colors.green,
+                          color: isBlocked
+                              ? Colors.grey
+                              : (hasAccess
+                                  ? Colors.green
+                                  : Colors.amber.shade800),
                         ),
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            'UNLOCKED CONTACT METHOD',
+                            isBlocked
+                                ? 'CONTACT BLOCKED'
+                                : (hasAccess
+                                    ? 'UNLOCKED CONTACT METHOD'
+                                    : 'PRIVATE CONTACT LOCKED'),
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 10.5,
                               fontWeight: FontWeight.bold,
-                              color: isBlocked ? Colors.grey : Colors.green.shade700,
+                              color: isBlocked
+                                  ? Colors.grey
+                                  : (hasAccess
+                                      ? Colors.green.shade700
+                                      : Colors.amber.shade800),
                               letterSpacing: 0.5,
                             ),
                           ),
@@ -135,13 +176,19 @@ class ContactRevealCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$contactMethod: $contactDetails',
+                      isBlocked
+                          ? 'Contact unavailable while blocked'
+                          : (hasAccess
+                              ? '$contactMethod: $contactDetails'
+                              : '$contactMethod: Private Contact Locked'),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: isBlocked
                             ? Colors.grey
-                            : (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+                            : (isDark
+                                ? AppColors.darkTextPrimary
+                                : AppColors.lightTextPrimary),
                       ),
                     ),
                   ],
@@ -149,30 +196,47 @@ class ContactRevealCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 10),
           if (!isBlocked) ...[
-            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
               height: 38,
               child: ElevatedButton.icon(
-                onPressed: () => _launchContact(context),
-                icon: Icon(_icon, size: 16, color: Colors.white),
-                label: Text(
-                  'Open in $contactMethod',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
+                onPressed: () => _showRestrictedContactNotice(context),
+                icon: const Icon(Icons.lock_outline,
+                    size: 16, color: Colors.white),
+                label: const Text(
+                  'Contact Opening Unavailable',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontSize: 13),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _badgeColor,
+                  backgroundColor: Colors.grey.shade600,
                   elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Direct external messaging is temporarily disabled pending server verification. Please chat in-app.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey,
+                  fontStyle: FontStyle.italic),
             ),
           ] else ...[
             const SizedBox(height: 6),
             const Text(
               'Contact action disabled while user is blocked',
-              style: TextStyle(fontSize: 11, color: Colors.grey, fontStyle: FontStyle.italic),
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.grey,
+                  fontStyle: FontStyle.italic),
             ),
           ],
         ],

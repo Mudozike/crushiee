@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/post_model.dart';
@@ -6,8 +7,8 @@ import '../services/database_service.dart';
 import '../services/firestore_service.dart';
 
 class PostProvider extends ChangeNotifier {
-  final DatabaseService _db = DatabaseService();
-  final FirestoreService _firestoreService = FirestoreService();
+  final DatabaseService _db;
+  final FirestoreService _firestoreService;
 
   String _selectedCommunity = 'All';
   String get selectedCommunity => _selectedCommunity;
@@ -18,17 +19,31 @@ class PostProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool get isLoading => _isLoading;
 
+  bool _isLoadingOlder = false;
+  bool get isLoadingOlder => _isLoadingOlder;
+
+  bool _hasMoreOlder = true;
+  bool get hasMoreOlder => _hasMoreOlder;
+
   // Exposed error — null means no error
   String? _fetchError;
   String? get fetchError => _fetchError;
 
   DocumentSnapshot? _lastDocument;
 
+  StreamSubscription<FeedSnapshotResult>? _feedSubscription;
+  final Map<String, PostModel> _streamPostsMap = {};
+  final Map<String, PostModel> _olderPostsMap = {};
+
   List<PostModel> get allPosts => _db.posts;
 
-  PostProvider() {
+  PostProvider({
+    FirestoreService? firestoreService,
+    DatabaseService? db,
+  })  : _firestoreService = firestoreService ?? FirestoreService(),
+        _db = db ?? DatabaseService() {
     _db.addListener(_onDbChanged);
-    fetchPosts(refresh: true);
+    initFeedStream();
   }
 
   void _onDbChanged() {
@@ -37,16 +52,124 @@ class PostProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _feedSubscription?.cancel();
+    _feedSubscription = null;
     _db.removeListener(_onDbChanged);
     super.dispose();
   }
 
+  /// Initialize real-time feed snapshot listener for the selected community
+  void initFeedStream({bool isRefresh = false}) {
+    _feedSubscription?.cancel();
+
+    if (isRefresh) {
+      _lastDocument = null;
+      _olderPostsMap.clear();
+      _hasMoreOlder = true;
+    }
+
+    try {
+      _feedSubscription = _firestoreService
+          .getFeedSnapshotStream(community: _selectedCommunity, limit: 20)
+          .listen(
+        (snapshotResult) {
+          _onSnapshotReceived(snapshotResult);
+        },
+        onError: (e) {
+          debugPrint('[POST_PROVIDER] Feed snapshot error: $e');
+          _fetchError = _formatFetchError(e);
+          _isLoading = false;
+          notifyListeners();
+        },
+      );
+    } catch (e) {
+      debugPrint('[POST_PROVIDER] Error initializing feed snapshot: $e');
+      _fetchError = _formatFetchError(e);
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  void _onSnapshotReceived(FeedSnapshotResult result) {
+    _streamPostsMap.clear();
+    for (final p in result.posts) {
+      _streamPostsMap[p.id] = p;
+      // Prevent duplication in paginated older posts
+      _olderPostsMap.remove(p.id);
+    }
+
+    if (_lastDocument == null) {
+      _lastDocument = result.lastDocument;
+    }
+
+    _mergeAndPublishPosts();
+    _isLoading = false;
+    _fetchError = null;
+    notifyListeners();
+  }
+
+  void _mergeAndPublishPosts() {
+    final merged = <String, PostModel>{..._olderPostsMap, ..._streamPostsMap};
+    final list = merged.values.where((p) => !p.isExpired).toList();
+
+    // Sort boosted posts first, then createdAt descending
+    list.sort((a, b) {
+      if (a.currentlyBoosted && !b.currentlyBoosted) return -1;
+      if (!a.currentlyBoosted && b.currentlyBoosted) return 1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+
+    _db.setPosts(list);
+  }
+
+  /// Pull-to-refresh or explicit refresh of the feed
+  Future<void> refreshFeed() async {
+    _isLoading = _db.posts.isEmpty;
+    _fetchError = null;
+    _hasMoreOlder = true;
+    notifyListeners();
+
+    initFeedStream(isRefresh: true);
+
+    // Initial query fetch to quickly populate feed if stream takes a moment
+    try {
+      final result = await _firestoreService.getPostsPaginated(
+        community: _selectedCommunity,
+        lastDocument: null,
+        limit: 20,
+      );
+      if (result.posts.isNotEmpty) {
+        _onSnapshotReceived(FeedSnapshotResult(
+          posts: result.posts,
+          lastDocument: result.lastDocument,
+        ));
+      }
+    } catch (e) {
+      debugPrint('[POST_PROVIDER] Initial feed fetch note: $e');
+      if (_db.posts.isEmpty) {
+        _fetchError = _formatFetchError(e);
+      }
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Backward-compatible fetchPosts API
   Future<void> fetchPosts({bool refresh = false}) async {
     if (refresh) {
-      _lastDocument = null;
+      await refreshFeed();
+    } else {
+      await loadOlderPosts();
     }
-    _isLoading = true;
-    _fetchError = null;
+  }
+
+  /// Load older posts using cursor-based pagination
+  Future<void> loadOlderPosts() async {
+    if (_isLoadingOlder || !_hasMoreOlder) return;
+    if (_streamPostsMap.isEmpty && _olderPostsMap.isEmpty && _lastDocument == null) return;
+
+    _isLoadingOlder = true;
     notifyListeners();
 
     try {
@@ -56,21 +179,23 @@ class PostProvider extends ChangeNotifier {
         limit: 20,
       );
 
-      if (refresh) {
-        _db.setPosts(result.posts);
-      } else {
-        final current = List<PostModel>.from(_db.posts)..addAll(result.posts);
-        _db.setPosts(current);
+      if (result.posts.isEmpty || result.posts.length < 20) {
+        _hasMoreOlder = false;
       }
 
-      _lastDocument = result.lastDocument;
+      if (result.posts.isNotEmpty) {
+        for (final p in result.posts) {
+          if (!_streamPostsMap.containsKey(p.id)) {
+            _olderPostsMap[p.id] = p;
+          }
+        }
+        _lastDocument = result.lastDocument;
+        _mergeAndPublishPosts();
+      }
     } catch (e) {
-      // Log the real error and expose it — do NOT silently return empty list.
-      debugPrint('[POST_PROVIDER] Firestore fetchPosts FAILED: $e');
-      _fetchError = _formatFetchError(e);
-      // Keep whatever posts were loaded previously (don't clear existing cache)
+      debugPrint('[POST_PROVIDER] Error loading older posts: $e');
     } finally {
-      _isLoading = false;
+      _isLoadingOlder = false;
       notifyListeners();
     }
   }
@@ -94,8 +219,14 @@ class PostProvider extends ChangeNotifier {
   }
 
   void selectCommunity(String community) {
+    if (_selectedCommunity == community && _feedSubscription != null) return;
     _selectedCommunity = community;
-    fetchPosts(refresh: true);
+    _streamPostsMap.clear();
+    _olderPostsMap.clear();
+    _lastDocument = null;
+    _hasMoreOlder = true;
+    _db.setPosts([]);
+    refreshFeed();
   }
 
   void setSearchQuery(String query) {
@@ -211,6 +342,11 @@ class PostProvider extends ChangeNotifier {
     return _firestoreService.getCommentsStream(postId);
   }
 
+  /// Real-time stream for an individual post document
+  Stream<PostModel?> getPostStream(String postId) {
+    return _firestoreService.getPostStream(postId);
+  }
+
   Future<void> addCrushComment({
     required String postId,
     required String userId,
@@ -242,10 +378,8 @@ class PostProvider extends ChangeNotifier {
     }
   }
 
-  /// Creates a post in Firestore. The post is only added to the local cache AFTER
-  /// Firestore confirms success, then the feed is refreshed from Firestore.
-  /// This prevents duplicate Firestore writes: DatabaseService.createPost() no longer
-  /// calls _firestoreService.createPost() — it is cache-only.
+  /// Creates a post in Firestore. The post is added to the local cache and stream map,
+  /// then pushed to Firestore where the real-time listener updates other clients.
   Future<bool> createPost(PostModel post) async {
     try {
       _isLoading = true;
@@ -255,11 +389,10 @@ class PostProvider extends ChangeNotifier {
       // Single Firestore write — PostProvider is the authority for this operation.
       await _firestoreService.createPost(post);
 
-      // Update in-memory cache immediately for optimistic UI
+      // Update in-memory cache and stream map immediately for optimistic UI
       _db.addPostToCache(post);
-
-      // Refresh feed from Firestore to pick up any server-side changes
-      await fetchPosts(refresh: true);
+      _streamPostsMap[post.id] = post;
+      _mergeAndPublishPosts();
 
       _isLoading = false;
       notifyListeners();
@@ -276,6 +409,13 @@ class PostProvider extends ChangeNotifier {
   Future<bool> updatePost(PostModel post, String userId) async {
     try {
       _db.updatePost(post, userId);
+      if (_streamPostsMap.containsKey(post.id)) {
+        _streamPostsMap[post.id] = post;
+      }
+      if (_olderPostsMap.containsKey(post.id)) {
+        _olderPostsMap[post.id] = post;
+      }
+      _mergeAndPublishPosts();
       await _firestoreService.updatePost(post);
       notifyListeners();
       return true;
@@ -288,6 +428,9 @@ class PostProvider extends ChangeNotifier {
   Future<bool> deletePost(String postId, String userId) async {
     try {
       _db.deletePost(postId, userId);
+      _streamPostsMap.remove(postId);
+      _olderPostsMap.remove(postId);
+      _mergeAndPublishPosts();
       await _firestoreService.deletePost(postId);
       notifyListeners();
       return true;

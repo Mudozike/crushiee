@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/app_colors.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_provider.dart';
-import '../providers/notification_provider.dart';
 import '../providers/post_provider.dart';
 import '../widgets/custom_app_bar.dart';
 import '../widgets/crushie_logo.dart';
@@ -19,6 +19,7 @@ import 'profile/verification_screen.dart';
 import 'premium/premium_subscription_screen.dart';
 import 'notifications/notifications_screen.dart';
 import 'settings/settings_screen.dart';
+import '../services/firestore_service.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final VoidCallback onLogout;
@@ -32,10 +33,66 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String? _initializedFollowUserId;
+  Timer? _heartbeatTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updatePresence(true);
+      _startHeartbeat();
+    });
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 90), (_) {
+      _updatePresence(true);
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _updatePresence(true);
+      _startHeartbeat();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      _stopHeartbeat();
+      _updatePresence(false);
+    }
+  }
+
+  void _updatePresence(bool isOnline) {
+    try {
+      final authProv = Provider.of<AuthProvider>(context, listen: false);
+      final user = authProv.currentUser;
+      if (user != null && user.id.isNotEmpty) {
+        FirestoreService().updateUserPresence(user.id, isOnline: isOnline);
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopHeartbeat();
+    _updatePresence(false);
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -53,12 +110,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final postProv = Provider.of<PostProvider>(context);
-    final authProv = Provider.of<AuthProvider>(context);
-    final notifProv = Provider.of<NotificationProvider>(context);
-    final currentUser = authProv.currentUser;
-
-    final unreadNotifs =
-        currentUser != null ? notifProv.getUnreadCount(currentUser.id) : 0;
 
     return Scaffold(
       key: _scaffoldKey,
